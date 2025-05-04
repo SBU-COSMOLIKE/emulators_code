@@ -127,7 +127,7 @@ class emulcmbtrf(BoltzmannBase):
 
         return True
 
-    def get_Cl(self, need_ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
+    def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
         cls_old = self.current_state.copy()
         
         cls_dict = { k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb" ] }
@@ -135,7 +135,7 @@ class emulcmbtrf(BoltzmannBase):
         
         ls = self.ell
         
-        if need_ell_factor:
+        if ell_factor:
             for k in [ "tt", "te", "ee" , "et" , "bb"]:
                 ls_fac = self.ell_factor(ls,k)
                 cls_dict[k] = cls_old[k] * ls_fac
