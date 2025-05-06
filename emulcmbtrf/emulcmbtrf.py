@@ -55,8 +55,8 @@ class emulcmbtrf(BoltzmannBase):
         self.model2.eval()
         self.model3.eval()
 
-        self.ell = np.arange(0,2551,1)
-        self.lmax_theory = 2551
+        self.ell = np.arange(0,9052,1)
+        self.lmax_theory = 9052
 
     def predict(self,model,X, extrainfo):
         device = 'cpu'
@@ -119,12 +119,11 @@ class emulcmbtrf(BoltzmannBase):
         state["te"] = np.zeros(self.lmax_theory)
         state["bb"] = np.zeros(self.lmax_theory)
         state["ee"] = np.zeros(self.lmax_theory)
-        state["tt"][2:] = self.scaletrans(TT_rescale, cmb_params)[0,:self.lmax_theory-2]
-        state["te"][2:] = self.scaletrans(TE_rescale, cmb_params)[0,:self.lmax_theory-2]
-        state["ee"][2:] = self.scaletrans(EE_rescale, cmb_params)[0,:self.lmax_theory-2]
+        state["tt"][2:5000] = self.scaletrans(TT_rescale, cmb_params)[0]
+        state["te"][2:5000] = self.scaletrans(TE_rescale, cmb_params)[0]
+        state["ee"][2:5000] = self.scaletrans(EE_rescale, cmb_params)[0]
         state["et"] = state["te"]
         
-
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):

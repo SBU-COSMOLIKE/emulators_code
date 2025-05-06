@@ -177,7 +177,6 @@ class TRF(nn.Module):
 
         # Def: we will only change the dimension of the datavector using linear transformations  
         
-        
         n_channels = N_channels
         int_dim_trf = int_trf
         modules.append(nn.Linear(input_dim, int_dim))
