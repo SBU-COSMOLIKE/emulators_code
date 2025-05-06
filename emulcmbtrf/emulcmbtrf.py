@@ -58,6 +58,10 @@ class emulcmbtrf(BoltzmannBase):
         self.ell = np.arange(0,9052,1)
         self.lmax_theory = 9052
 
+        self.extrainfo_TT = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('ttextraname'), allow_pickle=True)
+        self.extrainfo_TE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('teextraname'), allow_pickle=True)
+        self.extrainfo_EE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('eeextraname'), allow_pickle=True)
+
     def predict(self,model,X, extrainfo):
         device = 'cpu'
         X_mean=torch.Tensor(extrainfo.item()['X_mean']).to(device)
@@ -105,13 +109,9 @@ class emulcmbtrf(BoltzmannBase):
                         cmb_params[par] = [params[alias]]
                         break
 
-        extrainfo_TT = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('ttextraname'), allow_pickle=True)
-        extrainfo_TE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('teextraname'), allow_pickle=True)
-        extrainfo_EE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('eeextraname'), allow_pickle=True)
-
-        TT_rescale = self.predict(self.model1, cmb_params, extrainfo_TT)
-        TE_rescale = self.predict(self.model2, cmb_params, extrainfo_TE)
-        EE_rescale = self.predict(self.model3, cmb_params, extrainfo_EE)
+        TT_rescale = self.predict(self.model1, cmb_params, self.extrainfo_TT)
+        TE_rescale = self.predict(self.model2, cmb_params, self.extrainfo_TE)
+        EE_rescale = self.predict(self.model3, cmb_params, self.extrainfo_EE)
 
         factor=self.ell*(self.ell+1)/2/np.pi
         state["ell"] =self.ell.astype(int)
@@ -149,8 +149,6 @@ class emulcmbtrf(BoltzmannBase):
                 unit = self.cmb_unit_factor(k, units, Tcmb)
             
                 cls_dict[k] = cls_dict[k] * unit
-        
-        
         
         return cls_dict
         
