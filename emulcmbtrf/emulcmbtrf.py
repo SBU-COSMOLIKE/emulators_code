@@ -6,6 +6,10 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
 from cobaya.theories.emulcmbtrf.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, TRF
+import joblib
+import scipy
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF
 
 class emulcmbtrf(BoltzmannBase):
     aliases: dict = {
@@ -15,6 +19,7 @@ class emulcmbtrf(BoltzmannBase):
         "ln10^{10}A_s" : [ "logA" ],
         "n_s" : [ "ns" ],
         "tau_reio" : [ "tau" ],
+        "theta_star": ["thetastar"],
     }
 
     extra_args: InfoDict = { }
@@ -23,17 +28,34 @@ class emulcmbtrf(BoltzmannBase):
     def initialize(self):
         super().initialize()
         
-        PATH1 = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('ttfilename')
-        PATH2 = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('tefilename')
-        PATH3 = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('eefilename')
+        self.ROOT = os.environ.get("ROOTDIR")
+
+        self.PATH1 = self.ROOT + "/" + self.extra_args.get('ttfilename')
+        self.PATH2 = self.ROOT + "/" + self.extra_args.get('tefilename')
+        self.PATH3 = self.ROOT + "/" + self.extra_args.get('eefilename')
+        
+        self.PATH7 = "INIT"  # File that contains GP model for theta to H0
+
+        self.extrainfo_TT = np.load(self.ROOT+"/"+self.extra_args.get('ttextraname'),allow_pickle=True)
+        self.extrainfo_TE = np.load(self.ROOT+"/"+self.extra_args.get('teextraname'),allow_pickle=True)
+        self.extrainfo_EE = np.load(self.ROOT+"/"+self.extra_args.get('eeextraname'),allow_pickle=True)
+
+        self.extrainfo_GP = 0.0 # extra info file for GP of theta to H0
+        
         intdim = 4
+        nlayer = 4
         nc = 16
         inttrf=5120
         device = 'cpu'
+        intdim_simple = 1
+        nlayer_simple = 1
+
         self.model1 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
         self.model2 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
         self.model3 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
 
+        self.model7 = 0.0 # load GP model for theta to H0
+        
         self.model1 = self.model1.to(device)
         self.model2 = self.model2.to(device)
         self.model3 = self.model3.to(device)
@@ -42,10 +64,9 @@ class emulcmbtrf(BoltzmannBase):
         self.model2 = nn.DataParallel(self.model2)
         self.model3 = nn.DataParallel(self.model3)
 
-
-        self.model1.load_state_dict(torch.load(PATH1+'.pt',map_location=device))
-        self.model2.load_state_dict(torch.load(PATH2+'.pt',map_location=device))
-        self.model3.load_state_dict(torch.load(PATH3+'.pt',map_location=device))
+        self.model1.load_state_dict(torch.load(self.PATH1+'.pt',map_location=device))
+        self.model2.load_state_dict(torch.load(self.PATH2+'.pt',map_location=device))
+        self.model3.load_state_dict(torch.load(self.PATH3+'.pt',map_location=device))
 
         self.model1 = self.model1.module.to(device)
         self.model2 = self.model2.module.to(device)
@@ -58,48 +79,42 @@ class emulcmbtrf(BoltzmannBase):
         self.ell = np.arange(0,9052,1)
         self.lmax_theory = 9052
 
-        self.extrainfo_TT = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('ttextraname'), allow_pickle=True)
-        self.extrainfo_TE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('teextraname'), allow_pickle=True)
-        self.extrainfo_EE = np.load(os.environ.get("ROOTDIR") + "/" + self.extra_args.get('eeextraname'), allow_pickle=True)
+        self.testh0 = -1
 
     def predict(self,model,X, extrainfo):
         device = 'cpu'
+        
         X_mean=torch.Tensor(extrainfo.item()['X_mean']).to(device)
+        
         X_std=torch.Tensor(extrainfo.item()['X_std']).to(device)
+        
         Y_mean=torch.Tensor(extrainfo.item()['Y_mean']).to(device)
+        
         Y_std=torch.Tensor(extrainfo.item()['Y_std']).to(device)
 
-        X_send = np.array([X["omega_b"][0],X["omega_cdm"][0],X["H_0"][0],X["tau_reio"][0],X["n_s"][0],X["ln10^{10}A_s"][0],0.06,-1,0])
-        
-
+        X_send = np.array([X["omega_b"][0],
+                           X["omega_cdm"][0],
+                           X["H_0"][0],
+                           X["tau_reio"][0],
+                           X["n_s"][0],
+                           X["ln10^{10}A_s"][0],
+                           0.06,
+                           -1,0])
+    
         X = torch.Tensor(X_send).to(device)
 
         with torch.no_grad():
-            X_norm=((X - X_mean) / X_std)
-            X_norm[:,6:]=0
-
-
+            X_norm = (X - X_mean)/X_std
+            X_norm[:,6:] = 0
             X_norm.to(device)
-
-            
-            pred=model(X_norm)
-            
-            
-            M_pred=pred.to(device)
-            y_pred = (M_pred.float() *Y_std.float()+Y_mean.float()).cpu().numpy()
-            
-        return y_pred
+            M_pred = model(X_norm).to(device)
+        return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
 
     def scaletrans(self,y_pred,X):
-        X = np.array([X["omega_b"][0],X["omega_cdm"][0],X["H_0"][0],X["tau_reio"][0],X["n_s"][0],X["ln10^{10}A_s"][0]])
-        
-        for i in range(len(y_pred)):
-            y_pred[i]=y_pred[i]*(np.exp(X[5]))/(np.exp(2*X[3]))
-        return y_pred
+        return y_pred*np.exp(X["ln10^{10}A_s"][0])/np.exp(2*X["tau_reio"][0])
 
-    def calculate(self, state, want_derived = True, **params):
-        cmb_params = { }
-        
+    def calculate(self, state, want_derived=True, **params):
+        cmb_params = {}    
         for par in self.aliases:
             if par in params:
                 cmb_params[par] = [params[par]]
@@ -109,21 +124,46 @@ class emulcmbtrf(BoltzmannBase):
                         cmb_params[par] = [params[alias]]
                         break
 
-        TT_rescale = self.predict(self.model1, cmb_params, self.extrainfo_TT)
-        TE_rescale = self.predict(self.model2, cmb_params, self.extrainfo_TE)
-        EE_rescale = self.predict(self.model3, cmb_params, self.extrainfo_EE)
+        if 'H_0' not in cmb_params:
+            if self.testh0 < 0:
+                # This is the file that contains GP model for theta to H0
+                self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
 
-        factor=self.ell*(self.ell+1)/2/np.pi
-        state["ell"] =self.ell.astype(int)
+                # load GP model for theta to H0
+                self.model7 = joblib.load(self.PATH7) 
+
+                self.extrainfo_GP = np.load(self.ROOT + 
+                                            "/"  + 
+                                            self.extra_args.get('GPextraname'), 
+                                                                allow_pickle=True)
+            self.testh0 = 1
+
+            vt = np.array([[cmb_params["omega_b"][0], 
+                            cmb_params["omega_cdm"][0],
+                            cmb_params["theta_star"][0]]]) - self.extrainfo_GP.item()['X_mean']
+                    
+            cmb_params["H_0"]= [ self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*
+                                 self.extrainfo_GP.item()['Y_std'][0] + 
+                                 self.extrainfo_GP.item()['Y_mean'][0] ]
+
+        state["ell"] = self.ell.astype(int)
         state["tt"] = np.zeros(self.lmax_theory)
         state["te"] = np.zeros(self.lmax_theory)
         state["bb"] = np.zeros(self.lmax_theory)
         state["ee"] = np.zeros(self.lmax_theory)
-        state["tt"][2:5000] = self.scaletrans(TT_rescale, cmb_params)[0]
-        state["te"][2:5000] = self.scaletrans(TE_rescale, cmb_params)[0]
-        state["ee"][2:5000] = self.scaletrans(EE_rescale, cmb_params)[0]
+        state["tt"][2:5000] = self.scaletrans(self.predict(self.model1,
+                                                           cmb_params,
+                                                           self.extrainfo_TT), 
+                                              cmb_params)[0]
+        state["te"][2:5000] = self.scaletrans(self.predict(self.model2, 
+                                                           cmb_params, 
+                                                           self.extrainfo_TE), 
+                                              cmb_params)[0]
+        state["ee"][2:5000] = self.scaletrans(self.predict(self.model3, 
+                                                           cmb_params, 
+                                                           self.extrainfo_EE), 
+                                              cmb_params)[0]
         state["et"] = state["te"]
-        
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
@@ -212,7 +252,6 @@ class emulcmbtrf(BoltzmannBase):
             res *= 1. / np.sqrt(2.0 * np.pi)
         
         return res
-
 
     def get_can_support_params(self):
         return [ "omega_b", "omega_cdm", "h", "logA", "ns", "tau_reio" ]
