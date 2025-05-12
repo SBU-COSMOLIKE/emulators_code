@@ -12,21 +12,14 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF
 
 class emulcmbtrf(BoltzmannBase):
-    aliases: dict = {
-        "omega_b" : [ "omegabh2" ],
-        "omega_cdm" : [ "omegach2" ],
-        "H_0" : [ "H0" ],
-        "ln10^{10}A_s" : [ "logA" ],
-        "n_s" : [ "ns" ],
-        "tau_reio" : [ "tau" ],
-        "theta_star": ["thetastar"],
-    }
+    
 
     extra_args: InfoDict = { }
     
 
     def initialize(self):
         super().initialize()
+        self.ordering = self.extra_args.get('ordering')
         
         self.ROOT = os.environ.get("ROOTDIR")
 
@@ -91,40 +84,23 @@ class emulcmbtrf(BoltzmannBase):
         Y_mean=torch.Tensor(extrainfo.item()['Y_mean']).to(device)
         
         Y_std=torch.Tensor(extrainfo.item()['Y_std']).to(device)
-
-        X_send = np.array([X["omega_b"][0],
-                           X["omega_cdm"][0],
-                           X["H_0"][0],
-                           X["tau_reio"][0],
-                           X["n_s"][0],
-                           X["ln10^{10}A_s"][0],
-                           0.06,
-                           -1,0])
     
-        X = torch.Tensor(X_send).to(device)
+        X = torch.Tensor(X).to(device)
 
         with torch.no_grad():
             X_norm = (X - X_mean)/X_std
-            X_norm[:,6:] = 0
+            X_norm=torch.nan_to_num(X_norm, nan=0)
             X_norm.to(device)
             M_pred = model(X_norm).to(device)
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
 
     def scaletrans(self,y_pred,X):
-        return y_pred*np.exp(X["ln10^{10}A_s"][0])/np.exp(2*X["tau_reio"][0])
-
+        return y_pred*np.exp(X[self.ordering.index('logA')]))/(np.exp(2*X[self.ordering.index('tau')]))
+        
     def calculate(self, state, want_derived=True, **params):
-        cmb_params = {}    
-        for par in self.aliases:
-            if par in params:
-                cmb_params[par] = [params[par]]
-            else:
-                for alias in self.aliases[par]:
-                    if alias in params:
-                        cmb_params[par] = [params[alias]]
-                        break
+        cmb_param = params.copy()
 
-        if 'H_0' not in cmb_params:
+        if 'H_0' not in cmb_param:
             if self.testh0 < 0:
                 # This is the file that contains GP model for theta to H0
                 self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
@@ -138,13 +114,18 @@ class emulcmbtrf(BoltzmannBase):
                                                                 allow_pickle=True)
             self.testh0 = 1
 
-            vt = np.array([[cmb_params["omega_b"][0], 
-                            cmb_params["omega_cdm"][0],
-                            cmb_params["theta_star"][0]]]) - self.extrainfo_GP.item()['X_mean']
+            vt = np.array([[cmb_params["omegabh2"], 
+                            cmb_params["omegach2"],
+                            cmb_params["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
                     
-            cmb_params["H_0"]= [ self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*
+            cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*
                                  self.extrainfo_GP.item()['Y_std'][0] + 
-                                 self.extrainfo_GP.item()['Y_mean'][0] ]
+                                 self.extrainfo_GP.item()['Y_mean'][0]
+        cmb_params = []
+        for par in self.ordering:
+            cmb_params.append(cmb_param[par])
+            
+        cmb_params = np.array(cmb_params)
 
         state["ell"] = self.ell.astype(int)
         state["tt"] = np.zeros(self.lmax_theory)
