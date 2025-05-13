@@ -114,9 +114,9 @@ class emulcmbtrf(BoltzmannBase):
                                                                 allow_pickle=True)
             self.testh0 = 1
 
-            vt = np.array([[cmb_params["omegabh2"], 
-                            cmb_params["omegach2"],
-                            cmb_params["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
+            vt = np.array([[cmb_param["omegabh2"], 
+                            cmb_param["omegach2"],
+                            cmb_param["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
                     
             cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
         cmb_params = []
