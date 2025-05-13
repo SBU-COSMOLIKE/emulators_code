@@ -95,12 +95,12 @@ class emulcmbtrf(BoltzmannBase):
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
 
     def scaletrans(self,y_pred,X):
-        return y_pred*np.exp(X[self.ordering.index('logA')]))/(np.exp(2*X[self.ordering.index('tau')]))
+        return y_pred*np.exp(X[self.ordering.index('logA')])/np.exp(2*X[self.ordering.index('tau')])
         
     def calculate(self, state, want_derived=True, **params):
         cmb_param = params.copy()
 
-        if 'H_0' not in cmb_param:
+        if 'H0' not in cmb_param:
             if self.testh0 < 0:
                 # This is the file that contains GP model for theta to H0
                 self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
@@ -118,9 +118,7 @@ class emulcmbtrf(BoltzmannBase):
                             cmb_params["omegach2"],
                             cmb_params["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
                     
-            cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*
-                                 self.extrainfo_GP.item()['Y_std'][0] + 
-                                 self.extrainfo_GP.item()['Y_mean'][0]
+            cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
         cmb_params = []
         for par in self.ordering:
             cmb_params.append(cmb_param[par])
