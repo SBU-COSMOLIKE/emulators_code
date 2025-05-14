@@ -27,7 +27,12 @@ class emulcmbtrf(BoltzmannBase):
         self.PATH1 = self.ROOT + "/" + self.extra_args.get('ttfilename')
         self.PATH2 = self.ROOT + "/" + self.extra_args.get('tefilename')
         self.PATH3 = self.ROOT + "/" + self.extra_args.get('eefilename')
-        self.PATH4 = self.ROOT + "/" + self.extra_args.get('dlfilename')
+
+        if self.extra_args.get('sn_likelihood'):
+            self.PATH4 = self.ROOT + "/" + self.extra_args.get('dlfilename')
+            self.extrainfo_dl = np.load(self.ROOT+"/"+self.extra_args.get('dlextraname'), allow_pickle=True)
+            self.transmat_dl  = np.load(self.ROOT+"/"+self.extra_args.get('dltransmat'), allow_pickle=True)
+
 
         
         self.PATH7 = "INIT"  # File that contains GP model for theta to H0
@@ -35,9 +40,7 @@ class emulcmbtrf(BoltzmannBase):
         self.extrainfo_TT = np.load(self.ROOT+"/"+self.extra_args.get('ttextraname'),allow_pickle=True)
         self.extrainfo_TE = np.load(self.ROOT+"/"+self.extra_args.get('teextraname'),allow_pickle=True)
         self.extrainfo_EE = np.load(self.ROOT+"/"+self.extra_args.get('eeextraname'),allow_pickle=True)
-        self.extrainfo_dl = np.load(self.ROOT+"/"+self.extra_args.get('dlextraname'), allow_pickle=True)
-        self.transmat_dl  = np.load(self.ROOT+"/"+self.extra_args.get('dltransmat'), allow_pickle=True)
-
+        
         self.extrainfo_GP = 0.0 # extra info file for GP of theta to H0
         
         intdim = 4
@@ -54,7 +57,7 @@ class emulcmbtrf(BoltzmannBase):
         self.model4 = ResMLP(input_dim=2, output_dim=96, int_dim=intdim, N_layer=nlayer)
 
         self.model7 = 0.0 # load GP model for theta to H0
-        
+
         self.model1 = self.model1.to(device)
         self.model2 = self.model2.to(device)
         self.model3 = self.model3.to(device)
@@ -68,17 +71,20 @@ class emulcmbtrf(BoltzmannBase):
         self.model1.load_state_dict(torch.load(self.PATH1+'.pt',map_location=device))
         self.model2.load_state_dict(torch.load(self.PATH2+'.pt',map_location=device))
         self.model3.load_state_dict(torch.load(self.PATH3+'.pt',map_location=device))
-        self.model4.load_state_dict(torch.load(self.PATH4+'.pt',map_location=device))
+        
 
         self.model1 = self.model1.module.to(device)
         self.model2 = self.model2.module.to(device)
         self.model3 = self.model3.module.to(device)
-        self.model4 = self.model4.module.to(device)
-
+        
         self.model1.eval()
         self.model2.eval()
         self.model3.eval()
-        self.model4.eval()
+
+        if self.extra_args.get('sn_likelihood'):
+            self.model4.load_state_dict(torch.load(self.PATH4+'.pt',map_location=device))
+            self.model4 = self.model4.module.to(device)
+            self.model4.eval()
 
         self.ell = np.arange(0,9052,1)
         self.lmax_theory = 9052
@@ -186,7 +192,8 @@ class emulcmbtrf(BoltzmannBase):
                                                            self.extrainfo_EE), 
                                               cmb_params)[0]
         state["et"] = state["te"]
-        state["dl"] = self.predict_dl(self.model4, cmb_params, self.extrainfo_dl, self.transmat_dl)
+        if self.extra_args.get('sn_likelihood'):
+            state["dl"] = self.predict_dl(self.model4, cmb_params, self.extrainfo_dl, self.transmat_dl)
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
@@ -284,7 +291,7 @@ class emulcmbtrf(BoltzmannBase):
         d_a = d_l/(1+z_lin)**2
 
         D_A_interpolate = interpolate.interp1d(z_lin, d_a)
-        
+
         return D_A_interpolate(z)
 
     def get_can_support_params(self):
