@@ -284,9 +284,7 @@ class emulcmbtrf(BoltzmannBase):
         d_a = d_l/(1+z_lin)**2
 
         D_A_interpolate = interpolate.interp1d(z_lin, d_a)
-
-        print(D_A_interpolate(z))
-
+        
         return D_A_interpolate(z)
 
     def get_can_support_params(self):
