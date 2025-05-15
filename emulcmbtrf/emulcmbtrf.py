@@ -51,9 +51,9 @@ class emulcmbtrf(BoltzmannBase):
         intdim_simple = 1
         nlayer_simple = 1
 
-        self.model1 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
-        self.model2 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
-        self.model3 = TRF(input_dim=9,output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
+        self.model1 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
+        self.model2 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
+        self.model3 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
         self.model4 = ResMLP(input_dim=2, output_dim=96, int_dim=intdim, N_layer=nlayer)
 
         self.model7 = 0.0 # load GP model for theta to H0
