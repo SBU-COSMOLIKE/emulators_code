@@ -214,8 +214,10 @@ class emulbaores(BoltzmannBase):
 
         return D_A
 
-    def get_angular_diameter_distance2(self,zpair):
-        z_1, z_2 = zpair
+    def get_angular_diameter_distance_2(self,zpair):
+
+        z_1, z_2 = zpair[0]
+        
         if z_1 >= z_2:
             return 0
         else:
@@ -224,7 +226,7 @@ class emulbaores(BoltzmannBase):
 
             cd1 = da1*(1+z_1)
             cd2 = da2*(1+z_2)
-
+            
             return (cd2-cd1)/(1+z_2)
 
 
