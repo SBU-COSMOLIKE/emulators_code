@@ -4,6 +4,7 @@ import numpy as np
 import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theories.cosmo import BoltzmannBase
+from cobaya.theories.emulsnres import emulsnres
 from cobaya.typing import InfoDict
 from cobaya.theories.emulbaosnres.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
@@ -12,7 +13,7 @@ from scipy import interpolate
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF
 
-class emulbaosnres(BoltzmannBase):
+class emulbaosnres(emulsnres):
     
 
     extra_args: InfoDict = { }
@@ -80,37 +81,6 @@ class emulbaosnres(BoltzmannBase):
         self.testh0 = -1
 
 
-    def predict_dl(self,model,X, extrainfo,transform_matrix):
-        device = 'cpu'
-        X_mean=torch.Tensor(extrainfo.item()['X_mean']).to(device)
-        X_std=torch.Tensor(extrainfo.item()['X_std']).to(device)
-        Y_mean=extrainfo.item()['Y_mean']
-        Y_std=extrainfo.item()['Y_std']
-        Y_mean_2=torch.Tensor(extrainfo.item()['Y_mean_2']).to(device)
-        Y_std_2=torch.Tensor(extrainfo.item()['Y_std_2']).to(device)
-        
-
-        X_send = np.array([(X[self.ordering.index('omegabh2')]+X[self.ordering.index('omegach2')])/(X[self.ordering.index('H0')]/100)**2,X[self.ordering.index('H0')]])
-        
-
-        X = torch.Tensor(X_send).to(device)
-
-        with torch.no_grad():
-            X_norm=((X - X_mean) / X_std)
-
-
-
-            X_norm.to(device)
-
-            
-            pred=model(X_norm)
-            
-            
-            M_pred=pred.to(device)
-            y_pred = (M_pred.float() *Y_std_2.float()+Y_mean_2.float()).cpu().numpy()
-            y_pred = np.matmul(y_pred,transform_matrix)*Y_std+Y_mean
-            y_pred = np.exp(y_pred)-4400
-        return y_pred[0]
 
     def predict_H(self,model,X, extrainfo,transform_matrix):
         device = 'cpu'
