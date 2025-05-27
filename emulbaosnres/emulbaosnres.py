@@ -215,6 +215,9 @@ class emulbaosnres(emulsnres):
         else:
             l = 1
 
+        if units=="1/Mpc":
+            H_arr/=3e8
+
         return H_arr
 
     def get_can_support_params(self):
