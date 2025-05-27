@@ -216,7 +216,7 @@ class emulbaosnres(emulsnres):
             l = 1
 
         if units=="1/Mpc":
-            H_arr/=3e8
+            H_arr/=2.99792458e5
 
         return H_arr
 
