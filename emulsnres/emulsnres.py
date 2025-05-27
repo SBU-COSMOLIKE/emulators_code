@@ -5,7 +5,7 @@ import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
-from cobaya.theories.emulcmbtrf.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
+from cobaya.theories.emulsnres.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
 import scipy
 from scipy import interpolate
