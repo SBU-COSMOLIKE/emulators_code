@@ -3,7 +3,8 @@ import torch.nn as nn
 import numpy as np
 import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from cobaya.theories.cosmo import BoltzmannBase
+from cobaya.theory import Theory
+#from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
 from cobaya.theories.emulsnres.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
@@ -11,13 +12,15 @@ import scipy
 from scipy import interpolate
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF
+from typing import Mapping, Iterable
+from cobaya.typing import empty_dict, InfoDict
 
-class emulsnres(BoltzmannBase):
-    
-
+class emulsnres(Theory):   
+    renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
+    _must_provide: dict
+    path: str
     
-
     def initialize(self):
         super().initialize()
         self.ordering = self.extra_args.get('ordering')
@@ -58,6 +61,13 @@ class emulsnres(BoltzmannBase):
 
         self.testh0 = -1
 
+    def get_allow_agnostic(self):
+        return True
+
+    #def get_requirements(self):
+    #    return {"omegabh2": None,
+    #            "omegach2": None,
+    #            "H0": None}
 
     def predict_dl(self,model,X, extrainfo,transform_matrix):
         device = 'cpu'
