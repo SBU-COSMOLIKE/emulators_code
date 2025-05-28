@@ -3,7 +3,8 @@ import torch.nn as nn
 import numpy as np
 import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from cobaya.theories.cosmo import BoltzmannBase
+from cobaya.theory import Theory
+#from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
 from cobaya.theories.emulcmbtrf.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
@@ -11,13 +12,15 @@ import scipy
 from scipy import interpolate
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF
+from typing import Mapping, Iterable
+from cobaya.typing import empty_dict, InfoDict
 
-class emulcmbtrf(BoltzmannBase):
-    
-
+class emulcmbtrf(Theory):
+    renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
+    _must_provide: dict
+    path: str
     
-
     def initialize(self):
         super().initialize()
         self.ordering = self.extra_args.get('ordering')
@@ -78,6 +81,9 @@ class emulcmbtrf(BoltzmannBase):
 
         self.testh0 = -1
 
+    def get_allow_agnostic(self):
+        return True
+
     def predict(self,model,X, extrainfo):
         device = 'cpu'
         
@@ -101,7 +107,7 @@ class emulcmbtrf(BoltzmannBase):
     def scaletrans(self,y_pred,X):
         return y_pred*np.exp(X[self.ordering.index('logA')])/np.exp(2*X[self.ordering.index('tau')])
         
-    def calculate(self, state, want_derived=True, **params):
+    def calculate(self, state, want_derived=False, **params):
         cmb_param = params.copy()
 
         if 'H0' not in cmb_param:
@@ -147,6 +153,7 @@ class emulcmbtrf(BoltzmannBase):
                                                            self.extrainfo_EE), 
                                               cmb_params)[0]
         state["et"] = state["te"]
+
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
@@ -236,8 +243,6 @@ class emulcmbtrf(BoltzmannBase):
         
         return res
     
-
-
     def get_can_support_params(self):
         return [ "omega_b", "omega_cdm", "h", "logA", "ns", "tau_reio" ]
     

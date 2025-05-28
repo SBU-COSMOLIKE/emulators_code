@@ -159,7 +159,8 @@ class emulbaosnres(emulsnres):
             state["derived"]["rdrag"]=rdrag
         return True
 
-
+    def get_rdrag(self):
+        return self.model6.predict(vd/self.extrainfo_rdrag.item()['X_std'])[0]*self.extrainfo_rdrag.item()['Y_std'][0] + self.extrainfo_rdrag.item()['Y_mean'][0]
     
     def get_angular_diameter_distance(self,z):
         d_l = self.current_state["dl"].copy()
