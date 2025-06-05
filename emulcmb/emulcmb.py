@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
 #from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
-from cobaya.theories.emulcmbtrf.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
+from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP
 import joblib
 import scipy
 from scipy import interpolate
@@ -15,7 +15,7 @@ from sklearn.gaussian_process.kernels import RBF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
-class emulcmbtrf(Theory):
+class emulcmb(Theory):
     renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
     _must_provide: dict
@@ -24,6 +24,7 @@ class emulcmbtrf(Theory):
     def initialize(self):
         super().initialize()
         self.ordering = self.extra_args.get('ordering')
+        self.thetaordering = 0.0#self.extra_args.get('thetaordering')
         
         self.ROOT = os.environ.get("ROOTDIR")
 
@@ -47,10 +48,25 @@ class emulcmbtrf(Theory):
         device = 'cpu'
         intdim_simple = 1
         nlayer_simple = 1
+        cnn_dim = 3200
 
-        self.model1 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
-        self.model2 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
-        self.model3 = TRF(input_dim=len(self.ordering),output_dim=4998,int_dim=intdim, int_trf=inttrf,N_channels=nc)
+        self.model_type = self.extra_args.get('modeltype')
+        self.ell_max = self.extra_args.get('ellmax')
+
+        if self.model_type == 'TRF':
+            self.model1 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
+            self.model2 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
+            self.model3 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
+
+
+        elif self.model_type == 'CNN':
+
+            self.model1 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
+            self.model2 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
+            self.model3 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
+
+        else:
+            print('No model')
 
         self.model7 = 0.0 # load GP model for theta to H0
 
@@ -114,6 +130,7 @@ class emulcmbtrf(Theory):
             if self.testh0 < 0:
                 # This is the file that contains GP model for theta to H0
                 self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
+                self.thetaordering = self.extra_args.get('thetaordering')
 
                 # load GP model for theta to H0
                 self.model7 = joblib.load(self.PATH7) 
@@ -124,31 +141,28 @@ class emulcmbtrf(Theory):
                                                                 allow_pickle=True)
             self.testh0 = 1
 
-            vt = np.array([[cmb_param["omegabh2"], 
-                            cmb_param["omegach2"],
-                            cmb_param["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
+
+
+            vt =  np.array([cmb_param[key] for key in self.thetaordering]) - self.extrainfo_GP.item()['X_mean']
                     
             cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
-        cmb_params = []
-        for par in self.ordering:
-            cmb_params.append(cmb_param[par])
-            
-        cmb_params = np.array(cmb_params)
+
+        cmb_params = np.array([cmb_param[key] for key in self.ordering])
 
         state["ell"] = self.ell.astype(int)
         state["tt"] = np.zeros(self.lmax_theory)
         state["te"] = np.zeros(self.lmax_theory)
         state["bb"] = np.zeros(self.lmax_theory)
         state["ee"] = np.zeros(self.lmax_theory)
-        state["tt"][2:5000] = self.scaletrans(self.predict(self.model1,
+        state["tt"][2:self.ell_max] = self.scaletrans(self.predict(self.model1,
                                                            cmb_params,
                                                            self.extrainfo_TT), 
                                               cmb_params)[0]
-        state["te"][2:5000] = self.scaletrans(self.predict(self.model2, 
+        state["te"][2:self.ell_max] = self.scaletrans(self.predict(self.model2, 
                                                            cmb_params, 
                                                            self.extrainfo_TE), 
                                               cmb_params)[0]
-        state["ee"][2:5000] = self.scaletrans(self.predict(self.model3, 
+        state["ee"][2:self.ell_max] = self.scaletrans(self.predict(self.model3, 
                                                            cmb_params, 
                                                            self.extrainfo_EE), 
                                               cmb_params)[0]
