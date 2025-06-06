@@ -28,6 +28,7 @@ class emulsn(Theory):
         self.z_lin_dl = self.extra_args.get('zlindl')
         self.extradllevel = self.extra_args.get('extradllevel')
 
+
         
         self.ROOT = os.environ.get("ROOTDIR")
 
@@ -49,7 +50,7 @@ class emulsn(Theory):
         device = 'cpu'
 
 
-        self.model4 = ResMLP(input_dim=len(self.ordering), output_dim=96, int_dim=intdim, N_layer=nlayer)
+        self.model4 = ResMLP(input_dim=len(self.ordering), output_dim=len(self.transmat_dl), int_dim=intdim, N_layer=nlayer)
 
         self.model7 = 0.0 # load GP model for theta to H0
 

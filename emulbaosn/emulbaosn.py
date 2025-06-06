@@ -54,8 +54,8 @@ class emulbaosn(emulsn):
         device = 'cpu'
 
 
-        self.model4 = ResMLP(input_dim=len(self.ordering), output_dim=96, int_dim=intdim, N_layer=nlayer)
-        self.model5 = ResMLP(input_dim=len(self.ordering), output_dim=96, int_dim=intdim_simple, N_layer=nlayer_simple)
+        self.model4 = ResMLP(input_dim=len(self.ordering), output_dim=len(self.transmat_dl), int_dim=intdim, N_layer=nlayer)
+        self.model5 = ResMLP(input_dim=len(self.ordering), output_dim=len(self.transmat_H), int_dim=intdim_simple, N_layer=nlayer_simple)
 
         self.model7 = 0.0 # load GP model for theta to H0
 
