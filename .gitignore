@@ -1,0 +1,5 @@
+*.pyc
+emulsn/__pycache__
+emulcmb/__pycache__
+emulbaosn/__pycache__
+lsst_y1_cosmic_shear_emulator/__pycache__
