@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
 #from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
-from cobaya.theories.emulsnres.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
+from cobaya.theories.emulsn.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
 import scipy
 from scipy import interpolate
@@ -15,7 +15,7 @@ from sklearn.gaussian_process.kernels import RBF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
-class emulsnres(Theory):   
+class emulsn(Theory):   
     renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
     _must_provide: dict
@@ -24,6 +24,11 @@ class emulsnres(Theory):
     def initialize(self):
         super().initialize()
         self.ordering = self.extra_args.get('ordering')
+        self.thetaordering = 0.0
+        self.z_lin_dl = self.extra_args.get('zlindl')
+        self.extradllevel = self.extra_args.get('extradllevel')
+
+
         
         self.ROOT = os.environ.get("ROOTDIR")
 
@@ -45,7 +50,7 @@ class emulsnres(Theory):
         device = 'cpu'
 
 
-        self.model4 = ResMLP(input_dim=2, output_dim=96, int_dim=intdim, N_layer=nlayer)
+        self.model4 = ResMLP(input_dim=len(self.ordering), output_dim=len(self.transmat_dl), int_dim=intdim, N_layer=nlayer)
 
         self.model7 = 0.0 # load GP model for theta to H0
 
@@ -78,11 +83,7 @@ class emulsnres(Theory):
         Y_mean_2=torch.Tensor(extrainfo.item()['Y_mean_2']).to(device)
         Y_std_2=torch.Tensor(extrainfo.item()['Y_std_2']).to(device)
         
-
-        X_send = np.array([(X[self.ordering.index('omegabh2')]+X[self.ordering.index('omegach2')])/(X[self.ordering.index('H0')]/100)**2,X[self.ordering.index('H0')]])
-        
-
-        X = torch.Tensor(X_send).to(device)
+        X = torch.Tensor(X).to(device)
 
         with torch.no_grad():
             X_norm=((X - X_mean) / X_std)
@@ -98,7 +99,7 @@ class emulsnres(Theory):
             M_pred=pred.to(device)
             y_pred = (M_pred.float() *Y_std_2.float()+Y_mean_2.float()).cpu().numpy()
             y_pred = np.matmul(y_pred,transform_matrix)*Y_std+Y_mean
-            y_pred = np.exp(y_pred)-4400
+            y_pred = np.exp(y_pred)-self.extradllevel
         return y_pred[0]
 
 
@@ -110,6 +111,7 @@ class emulsnres(Theory):
             if self.testh0 < 0:
                 # This is the file that contains GP model for theta to H0
                 self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
+                self.thetaordering = self.extra_args.get('thetaordering')
 
                 # load GP model for theta to H0
                 self.model7 = joblib.load(self.PATH7) 
@@ -120,17 +122,13 @@ class emulsnres(Theory):
                                                                 allow_pickle=True)
             self.testh0 = 1
 
-            vt = np.array([[cmb_param["omegabh2"], 
-                            cmb_param["omegach2"],
-                            cmb_param["thetastar"]]]) - self.extrainfo_GP.item()['X_mean']
+            vt =  np.array([cmb_param[key] for key in self.thetaordering]) - self.extrainfo_GP.item()['X_mean']
                     
             cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
-        cmb_params = []
-        for par in self.ordering:
-            cmb_params.append(cmb_param[par])
-            
-        cmb_params = np.array(cmb_params)
+        cmb_param["omm"] = (cmb_param["omegabh2"]+cmb_param["omegach2"])/(cmb_param["H0"]/100)**2
 
+        cmb_params = np.array([cmb_param[key] for key in self.ordering])
+        
         state["dl"] = self.predict_dl(self.model4, cmb_params, self.extrainfo_dl, self.transmat_dl)
         return True
 
@@ -139,7 +137,7 @@ class emulsnres(Theory):
     def get_angular_diameter_distance(self,z):
         d_l = self.current_state["dl"].copy()
 
-        z_lin = np.linspace( -0.5, 3, num=2333, endpoint=True)
+        z_lin = np.load(self.z_lin_dl, allow_pickle=True)
 
         d_a = d_l/(1+z_lin)**2
 
