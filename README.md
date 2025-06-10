@@ -1,8 +1,3 @@
-# Table of contents
-1. [Overview of the Emulators](#overview)
-2. [CMB Emulators](#CMB)
-3. [Supernovae and BAO Emulators](#SNBAO)
-
 ## Overview of the Emulators <a name="overview"></a>
 
 Emulators are Machine Learning models that map cosmological (and nuisance) parameters to cosmological data vectors, just like many numerical packages for corresponding observables. The advantage of emulators is the fast evaluation time. As cosmology moves into an era when intense analyses require more and more computational resources for experiments with advancing precision and resolution, many traditional numerical packages become too slow in terms of evaluation time. Emulators are developed to overcome this issue and can widely replace many numerical packages in MCMCs.
