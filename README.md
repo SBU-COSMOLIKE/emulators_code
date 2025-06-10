@@ -6,7 +6,11 @@ In this repository, we provide emulators for various data vectors and in differe
 
 ## CMB Emulators <a name="CMB"></a>
 
-Cosmic Microwave Background (CMB) emulators are trained to emulate `TT` (temperature auto spectrum), `TE` (temperature-polarization cross spectrum), and `EE` (polarization auto spectrum) power spectra output calculated by `CAMB` Boltznman code. We provide a few architecture options; for instance, the users can select `modeltype` to be either `TRF` (standing for Transformer) or `CNN` (standing for Convolutional Neural Network).  Users then need to specify the corresponding emulator, each emulator correspond to a cosmological model as well as a specific CAMB version and accuracy settings. This is done as follows
+Cosmic Microwave Background (CMB) emulators are trained to emulate `TT` (temperature auto spectrum), `TE` (temperature-polarization cross spectrum), and `EE` (polarization auto spectrum) power spectra output calculated by `CAMB` Boltznman code. 
+
+We provide a few architecture options; for instance, the users can select `modeltype` to be either `TRF` (standing for Transformer) or `CNN` (standing for Convolutional Neural Network).  
+
+Users then need to specify the corresponding emulator, each emulator correspond to a cosmological model as well as a specific CAMB version and accuracy settings. This is done as follows
 
 **Step :one:**: Select the 'ordering' list, which needs to be the exact sequence of parameters input to the emulator.,
 
