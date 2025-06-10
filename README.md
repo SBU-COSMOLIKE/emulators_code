@@ -16,7 +16,7 @@ Cosmic Microwave Background (CMB) emulators are trained to emulate `TT` (tempera
     'xyfilename':   emulator model parameters and 
     'xyextraname': normalization factors, . 
 
-**Step :three:**: Specify 'ellmax', which is the largest ell mode that the emulator is trained to evaluate.
+**Step :three:**: Specify `ellmax`, which is the largest ell mode that the emulator is trained to evaluate.
 
 **Step :four:**: If users want to sample the parameter `theta_*` (recommended) instead of `H_0`, specify the following parameters
 
