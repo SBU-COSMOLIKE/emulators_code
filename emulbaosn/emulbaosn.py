@@ -28,7 +28,8 @@ class emulbaosn(Theory):
         self.z      = [None, None] # dl, H(z)
         self.tmat   = [None, None] # dl, H(z)
         self.offset = [None, None] # dl, H(z)
-
+        self.ord    = [None, None] # dl, H(z)
+        self.req    = [] 
         for i in range(2):
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]
@@ -52,8 +53,17 @@ class emulbaosn(Theory):
                 self.M[i] = self.M[i].module.to('cpu')
                 self.M[i].eval()
 
-    def get_allow_agnostic(self):
-        return True
+                self.ord[i] = self.extra_args.get('ord')[i]
+                self.req.extend(self.ord[i])
+        
+        self.req = list(set(self.req))
+        d = {}
+        for i in self.req:
+            d[i] = None
+        self.req = d
+
+    def get_requirements(self):
+        return self.req
 
     def predict(self, model, X, extrainfo, transform_matrix, offset):
         device   = 'cpu'
@@ -76,6 +86,8 @@ class emulbaosn(Theory):
    
     def calculate(self, state, want_derived=True, **params):       
         par = params.copy()
+        print(par)
+        print(state)
 
         out    = ["dl","H"]
         idx    = np.where(np.array(self.extra_args.get('eval'))[:2])[0]

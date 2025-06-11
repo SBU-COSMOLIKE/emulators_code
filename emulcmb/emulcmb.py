@@ -27,8 +27,10 @@ class emulcmb(Theory):
         self.lmax_theory = 9052
         self.ell         = np.arange(0,self.lmax_theory,1)
         # TT, TE, EE, PHIPHI, RD, THETA
-        self.M        = [None, None, None, None, None, None, None, None, None]
-        self.info     = [None, None, None, None, None, None, None, None, None]
+        self.M      = [None, None, None, None, None, None, None, None, None]
+        self.info   = [None, None, None, None, None, None, None, None, None]
+        self.ord    = [None, None, None, None, None, None, None, None, None]
+        self.req    = [] 
 
         for i in range(3):
             if self.extra_args.get('eval')[i]:
@@ -52,21 +54,33 @@ class emulcmb(Theory):
                 self.M[i].load_state_dict(torch.load(fname, map_location='cpu'))
                 self.M[i] = self.M[i].module.to('cpu')
                 self.M[i].eval()
+                self.ord[i] = self.extra_args.get('ord')[i]
+                self.req.extend(self.ord[i])
 
         if self.extra_args.get('eval')[4]:
             fname  = RT+"/"+self.extra_args.get("file")[4]
             fextra = RT+"/"+self.extra_args.get("extra")[4]            
             self.info[4] = np.load(fextra, allow_pickle=True)
             self.M[4]    = joblib.load(fname)
+            self.ord[4] = self.extra_args.get('ord')[4]
+            self.req.extend(self.ord[4])
 
         if self.extra_args.get('eval')[5]:
             fname  = RT+"/"+self.extra_args.get("file")[5]
             fextra = RT+"/"+self.extra_args.get("extra")[5]
             self.info[5] = np.load(fextra,allow_pickle=True)
             self.M[5]    = joblib.load(fname)
+            self.ord[5]  = self.extra_args.get('ord')[5]
+            self.req.extend(self.ord[5])
 
-    def get_allow_agnostic(self):
-        return True
+        self.req = list(set(self.req))
+        d = {}
+        for i in self.req:
+            d[i] = None
+        self.req = d
+
+    def get_requirements(self):
+        return self.req
 
     def predict_cmb(self,model,X, einfo):
         device = 'cpu'
@@ -87,7 +101,7 @@ class emulcmb(Theory):
 
         # theta_star calculation begins ---------------------------
         if self.extra_args.get('eval')[5]:
-            params = self.extra_args.get('ord')[5]
+            params = self.ord[5]
             X_mean = self.info[5].item()['X_mean']
             Y_mean = self.info[5].item()['Y_mean']
             X_std  = self.info[5].item()['X_std']
@@ -115,8 +129,7 @@ class emulcmb(Theory):
         
         idx  = np.where(np.array(self.extra_args.get('eval'))[:3])[0]
         for i in idx:
-            params = self.extra_args.get('ord')[i]
-
+            params = self.ord[i]
             p = np.array([par[key] for key in params])
             logAs  = p[params.index('logA')]
             tau    = p[params.index('tau')]
@@ -128,7 +141,7 @@ class emulcmb(Theory):
 
         # rd calculation begins ---------------------------
         if self.extra_args.get('eval')[4]:
-            params = self.extra_args.get('ord')[4]
+            params = self.ord[4]
             X_mean = self.info[4].item()['X_mean']
             Y_mean = self.info[4].item()['Y_mean']
             X_std  = self.info[4].item()['X_std']
