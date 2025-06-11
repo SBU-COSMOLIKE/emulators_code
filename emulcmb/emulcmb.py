@@ -27,14 +27,14 @@ class emulcmb(Theory):
         self.lmax_theory = 9052
         self.ell         = np.arange(0,self.lmax_theory,1)
         # TT, TE, EE, PHIPHI, RD, THETA
-        self.M     = [None, None, None, None, None, None, None, None, None]
-        self.info  = [None, None, None, None, None, None, None, None, None]
+        self.M        = [None, None, None, None, None, None, None, None, None]
+        self.info     = [None, None, None, None, None, None, None, None, None]
 
         for i in range(3):
             if self.extra_args.get('eval')[i]:
-                fname  = self.extra_args.get("file")[i]
-                fextra = self.extra_args.get("extra")[i]
-                self.info[i] = np.load(RT + "/" + fextra, allow_pickle=True)
+                fname  = RT + "/" + self.extra_args.get("file")[i]
+                fextra = RT + "/" + self.extra_args.get("extra")[i]
+                self.info[i] = np.load(fextra, allow_pickle=True)
 
                 if self.extra_args.get('extrapar')[i]['MLA'] == 'TRF':
                     self.M[i] = TRF(input_dim=len(self.extra_args.get('ord')[i]),
@@ -49,23 +49,21 @@ class emulcmb(Theory):
                                        cnn_dim=self.extra_args.get('extrapar')[i]['INTCNN'])
                 self.M[i] = self.M[i].to('cpu')
                 self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(RT + "/" + fname, map_location='cpu'))
+                self.M[i].load_state_dict(torch.load(fname, map_location='cpu'))
                 self.M[i] = self.M[i].module.to('cpu')
                 self.M[i].eval()
 
         if self.extra_args.get('eval')[4]:
-            fname  = self.extra_args.get("file")[4]
-            fextra = self.extra_args.get("extra")[4]            
-            self.info[4] = np.load(RT + "/" + fextra, allow_pickle=True)
-            self.M[4]    = joblib.load(RT + "/" + fname)
-
+            fname  = RT+"/"+self.extra_args.get("file")[4]
+            fextra = RT+"/"+self.extra_args.get("extra")[4]            
+            self.info[4] = np.load(fextra, allow_pickle=True)
+            self.M[4]    = joblib.load(fname)
 
         if self.extra_args.get('eval')[5]:
-            fname  = self.extra_args.get("file")[5]
-            fextra = self.extra_args.get("extra")[5]
-            self.info[5] = np.load(RT + "/" + fextra,allow_pickle=True)
-            self.M[5]    = joblib.load(RT + "/" + fname)
-
+            fname  = RT+"/"+self.extra_args.get("file")[5]
+            fextra = RT+"/"+self.extra_args.get("extra")[5]
+            self.info[5] = np.load(fextra,allow_pickle=True)
+            self.M[5]    = joblib.load(fname)
 
     def get_allow_agnostic(self):
         return True
@@ -90,30 +88,41 @@ class emulcmb(Theory):
         # theta_star calculation begins ---------------------------
         if self.extra_args.get('eval')[5]:
             params = self.extra_args.get('ord')[5]
-            p =  np.array([par[key] for key in params])-self.info[5].item()['X_mean']     
-            par["H0"]=self.M[5].predict(p/self.info[5].item()['X_std'])[0]*self.info[5].item()['Y_std'][0]+self.info[5].item()['Y_mean'][0]
-            par["omegam"]=(par["omegabh2"]+par["omegach2"])/(par["H0"]/100)**2+par["mnu"]*(3.046/3)**0.75/94.0708
-            state["H0"]=par["H0"]
-            state["omegam"]=par["omegam"]
+            X_mean = self.info[5].item()['X_mean']
+            Y_mean = self.info[5].item()['Y_mean']
+            X_std  = self.info[5].item()['X_std']
+            Y_std  = self.info[5].item()['Y_std']
+            p =  np.array([par[key] for key in params]) - X_mean     
+            H0 = self.M[5].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
+            
+            h2       = (H0/100.0)**2
+            mnu      = par["mnu"]
+            omegach2 = par["omegach2"]
+            omegabh2 = par["omegabh2"]
+
+            par.update({"H0": H0})
+            par.update({"omegam": (omegabh2+omegach2)/h2+mnu*(3.046/3)**0.75/94.0708})   
+            state.update({"H0": par["H0"]})
+            state.update({"omegam": par["omegam"]})    
+            state["derived"].update({"H0": par["H0"]})
+            state["derived"].update({"omegam": par["omegam"]})
         # theta_star calculation ends ---------------------------
 
         # cl calculation begins ---------------------------
         state["ell"] = self.ell.astype(int)
-        state["bb"]  = np.zeros(self.lmax_theory)
-        state["tt"]  = np.zeros(self.lmax_theory)
-        state["te"]  = np.zeros(self.lmax_theory)
-        state["ee"]  = np.zeros(self.lmax_theory)
-        cmb  = ['tt', 'te', 'ee', 'pp']
-        for i in range(3):
-            if self.extra_args.get('eval')[i]:
-                state[cmb[i]] = np.zeros(self.lmax_theory)
-                params = self.extra_args.get('ord')[i]
-                p = np.array([par[key] for key in params])
-                logAs  = p[params.index('logA')]
-                tau    = p[params.index('tau')]
-                amp    = np.exp(logAs)/np.exp(2*tau)
-                ellmax = self.extra_args.get('extrapar')[i]['ellmax']
-                state[cmb[i]][2:ellmax] = self.predict_cmb(self.M[i], p, self.info[i])*amp
+        cmb  = ['tt', 'te', 'ee', 'pp', 'bb']
+        state.update({cmb[i]: np.zeros(self.lmax_theory) for i in range(5)})
+        
+        idx  = np.where(np.array(self.extra_args.get('eval'))[:3])[0]
+        for i in idx:
+            params = self.extra_args.get('ord')[i]
+
+            p = np.array([par[key] for key in params])
+            logAs  = p[params.index('logA')]
+            tau    = p[params.index('tau')]
+            norm    = np.exp(logAs)/np.exp(2*tau)
+            lmax   = self.extra_args.get('extrapar')[i]['ellmax']
+            state[cmb[i]][2:lmax] = self.predict_cmb(self.M[i], p, self.info[i])*norm
         state["et"] = state["te"]
         # cl calculation ends ---------------------------
 
@@ -126,8 +135,8 @@ class emulcmb(Theory):
             Y_std  = self.info[4].item()['Y_std']
             p  = np.array([par[key] for key in params]) - X_mean
             rd = self.M[4].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
-            state['rdrag']   = rd
-            state["derived"] = {"rdrag": rd}
+            state.update({'rdrag':rd})
+            state["derived"].update({'rdrag':rd})
         # cl calculation ends ---------------------------
         return True
     
@@ -146,7 +155,10 @@ class emulcmb(Theory):
         return state["omegam"]
 
     def get_rdrag(self):
-        return self.M[4].predict(vd/self.info[4].item()['X_std'])[0]*self.info[4].item()['Y_std'][0]+self.info[4].item()['Y_mean'][0]
+        X_std  = self.info[4].item()['X_std']
+        Y_std  = self.info[4].item()['Y_std']
+        Y_mean = self.info[4].item()['Y_mean']
+        return self.M[4].predict(vd/X_std)[0]*Y_std[0] + Y_mean[0]
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
         cls_old = self.current_state.copy()

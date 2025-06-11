@@ -4,7 +4,6 @@ import numpy as np
 import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
-#from cobaya.theories.cosmo import BoltzmannBase
 from cobaya.typing import InfoDict
 from cobaya.theories.emulsn.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
 import joblib
