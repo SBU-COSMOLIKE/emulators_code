@@ -15,22 +15,17 @@ from sklearn.gaussian_process.kernels import RBF
 
 class emulbaosn(emulsn):
     
-
     extra_args: InfoDict = { }
     
-
     def initialize(self):
         super().initialize()
         self.ordering = self.extra_args.get('ordering')
         self.thetaordering = 0.0
-        self.rdragordering = self.extra_args.get('rdragordering')
         self.z_lin_dl = self.extra_args.get('zlindl')
         self.z_lin_H = self.extra_args.get('zlinH')
         self.extradllevel = self.extra_args.get('extradllevel')
         
-        
         self.ROOT = os.environ.get("ROOTDIR")
-
 
         self.PATH4 = self.ROOT + "/" + self.extra_args.get('dlfilename')
         self.PATH5 = self.ROOT + "/" + self.extra_args.get('Hfilename')
@@ -38,11 +33,8 @@ class emulbaosn(emulsn):
         self.transmat_dl  = np.load(self.ROOT+"/"+self.extra_args.get('dltransmat'), allow_pickle=True)
         self.extrainfo_H = np.load(self.ROOT+"/"+self.extra_args.get('Hextraname'), allow_pickle=True)
         self.transmat_H  = np.load(self.ROOT+"/"+self.extra_args.get('Htransmat'), allow_pickle=True)
-
-
         
         self.PATH7 = "INIT"  # File that contains GP model for theta to H0
-
         
         self.extrainfo_GP = 0.0 # extra info file for GP of theta to H0
         
@@ -74,19 +66,14 @@ class emulbaosn(emulsn):
         self.model5 = self.model5.module.to(device)
         self.model5.eval()
 
-        self.PATH6 = self.ROOT + "/" + self.extra_args.get('rdragfilename')
-
-        # load GP model for theta to H0
-        self.model6 = joblib.load(self.PATH6) 
-
-        self.extrainfo_rdrag = np.load(self.ROOT + 
-                                    "/"  + 
-                                    self.extra_args.get('rdragextraname'), 
-                                                        allow_pickle=True)
-
         self.testh0 = -1
 
-
+    def get_requirements(self):
+        return {
+          "H0": None,
+          "omegam": None,
+          "rdrag": None,
+        }
 
     def predict_H(self,model,X, extrainfo,transform_matrix):
         device = 'cpu'
@@ -103,23 +90,17 @@ class emulbaosn(emulsn):
         with torch.no_grad():
             X_norm=((X - X_mean) / X_std)
 
-
-
             X_norm.to(device)
 
-            
             pred=model(X_norm)
-            
-            
+                 
             M_pred=pred.to(device)
             y_pred = (M_pred.float() *Y_std_2.float()+Y_mean_2.float()).cpu().numpy()
             y_pred = np.matmul(y_pred,transform_matrix)*Y_std+Y_mean
             y_pred = np.exp(y_pred)
         return y_pred[0]
-
-
-        
-    def calculate(self, state, want_derived=True, **params):
+   
+    def calculate(self, state, want_derived=True, **params):       
         cmb_param = params.copy()
 
         if 'H0' not in cmb_param:
@@ -139,27 +120,17 @@ class emulbaosn(emulsn):
 
             vt =  np.array([cmb_param[key] for key in self.thetaordering]) - self.extrainfo_GP.item()['X_mean']
                     
-            cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
-        cmb_param["omm"] = (cmb_param["omegabh2"]+cmb_param["omegach2"])/(cmb_param["H0"]/100)**2
-
+            cmb_param["H0"]= (self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + 
+                              self.extrainfo_GP.item()['Y_mean'][0])
+            cmb_param["omegam"] = ((cmb_param["omegabh2"]+
+                                    cmb_param["omegach2"])/(cmb_param["H0"]/100)**2 + 
+                                    cmb_param["mnu"]*(3.046/3)**0.75/94.0708)
         cmb_params = np.array([cmb_param[key] for key in self.ordering])
 
         state["dl"] = self.predict_dl(self.model4, cmb_params, self.extrainfo_dl, self.transmat_dl)
-        state["H"] = self.predict_H(self.model5, cmb_params, self.extrainfo_H, self.transmat_H)
+        state["H"]  = self.predict_H(self.model5, cmb_params, self.extrainfo_H, self.transmat_H)
 
-        vd = np.array([cmb_param[key] for key in self.rdragordering]) - self.extrainfo_rdrag.item()['X_mean']
-        rdrag = self.model6.predict(vd/self.extrainfo_rdrag.item()['X_std'])[0]*self.extrainfo_rdrag.item()['Y_std'][0] + self.extrainfo_rdrag.item()['Y_mean'][0]
-        if "derived" in state:
-            state["derived"].update({"rdrag": rdrag})#test
-        elif "rdrag" not in state["derived"]:
-            state["derived"]={"rdrag": rdrag}
-        else:
-            state["derived"]["rdrag"]=rdrag
-        return True
-
-    def get_rdrag(self):
-        return self.model6.predict(vd/self.extrainfo_rdrag.item()['X_std'])[0]*self.extrainfo_rdrag.item()['Y_std'][0] + self.extrainfo_rdrag.item()['Y_mean'][0]
-    
+        
     def get_angular_diameter_distance(self,z):
         d_l = self.current_state["dl"].copy()
 
@@ -197,7 +168,6 @@ class emulbaosn(emulsn):
             cd2 = da2*(1+z_2)
             
             return (cd2-cd1)/(1+z_2)
-
 
     def get_Hubble(self,z,units="km/s/Mpc"):
         H = self.current_state["H"].copy()

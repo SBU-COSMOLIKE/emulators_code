@@ -23,157 +23,135 @@ class emulcmb(Theory):
     
     def initialize(self):
         super().initialize()
-        self.ordering = self.extra_args.get('ordering')
-        self.thetaordering = 0.0#self.extra_args.get('thetaordering')
-        
-        self.ROOT = os.environ.get("ROOTDIR")
-
-        self.PATH1 = self.ROOT + "/" + self.extra_args.get('ttfilename')
-        self.PATH2 = self.ROOT + "/" + self.extra_args.get('tefilename')
-        self.PATH3 = self.ROOT + "/" + self.extra_args.get('eefilename')
-
-        
-        self.PATH7 = "INIT"  # File that contains GP model for theta to H0
-
-        self.extrainfo_TT = np.load(self.ROOT+"/"+self.extra_args.get('ttextraname'),allow_pickle=True)
-        self.extrainfo_TE = np.load(self.ROOT+"/"+self.extra_args.get('teextraname'),allow_pickle=True)
-        self.extrainfo_EE = np.load(self.ROOT+"/"+self.extra_args.get('eeextraname'),allow_pickle=True)
-        
-        self.extrainfo_GP = 0.0 # extra info file for GP of theta to H0
-        
-        intdim = 4
-        nlayer = 4
-        nc = 16
-        inttrf=5120
-        device = 'cpu'
-        intdim_simple = 1
-        nlayer_simple = 1
-        cnn_dim = 3200
-
-        self.model_type = self.extra_args.get('modeltype')
-        self.ell_max = self.extra_args.get('ellmax')
-
-        if self.model_type == 'TRF':
-            self.model1 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
-            self.model2 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
-            self.model3 = TRF(input_dim=len(self.ordering),output_dim=self.ell_max-2, int_dim=intdim, int_trf=inttrf,N_channels=nc)
-
-
-        elif self.model_type == 'CNN':
-
-            self.model1 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
-            self.model2 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
-            self.model3 = CNNMLP(input_dim=len(self.ordering),output_dim=self.ell_max-2,int_dim=intdim, cnn_dim=cnn_dim)
-
-        else:
-            print('No model')
-
-        self.model7 = 0.0 # load GP model for theta to H0
-
-        self.model1 = self.model1.to(device)
-        self.model2 = self.model2.to(device)
-        self.model3 = self.model3.to(device)
-
-        self.model1 = nn.DataParallel(self.model1)
-        self.model2 = nn.DataParallel(self.model2)
-        self.model3 = nn.DataParallel(self.model3)
-
-        self.model1.load_state_dict(torch.load(self.PATH1+'.pt',map_location=device))
-        self.model2.load_state_dict(torch.load(self.PATH2+'.pt',map_location=device))
-        self.model3.load_state_dict(torch.load(self.PATH3+'.pt',map_location=device))
-        
-
-        self.model1 = self.model1.module.to(device)
-        self.model2 = self.model2.module.to(device)
-        self.model3 = self.model3.module.to(device)
-        
-        self.model1.eval()
-        self.model2.eval()
-        self.model3.eval()
-
-
-        self.ell = np.arange(0,9052,1)
+        RT = os.environ.get("ROOTDIR")
         self.lmax_theory = 9052
+        self.ell         = np.arange(0,self.lmax_theory,1)
+        # TT, TE, EE, PHIPHI, RD, THETA
+        self.M     = [None, None, None, None, None, None, None, None, None]
+        self.info  = [None, None, None, None, None, None, None, None, None]
 
-        self.testh0 = -1
+        for i in range(3):
+            if self.extra_args.get('eval')[i]:
+                fname  = self.extra_args.get("file")[i]
+                fextra = self.extra_args.get("extra")[i]
+                self.info[i] = np.load(RT + "/" + fextra, allow_pickle=True)
+
+                if self.extra_args.get('extrapar')[i]['MLA'] == 'TRF':
+                    self.M[i] = TRF(input_dim=len(self.extra_args.get('ord')[i]),
+                        output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
+                        int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
+                        int_trf=self.extra_args.get('extrapar')[i]['INTTRF'],
+                        N_channels=self.extra_args.get('extrapar')[i]['NCTRF'])
+                elif self.extra_args.get('extrapar')[i]['MLA'] == 'CNN':
+                    self.M[i] = CNNMLP(input_dim=len(self.extra_args.get('ord')[i]),
+                                       output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
+                                       int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
+                                       cnn_dim=self.extra_args.get('extrapar')[i]['INTCNN'])
+                self.M[i] = self.M[i].to('cpu')
+                self.M[i] = nn.DataParallel(self.M[i])
+                self.M[i].load_state_dict(torch.load(RT + "/" + fname, map_location='cpu'))
+                self.M[i] = self.M[i].module.to('cpu')
+                self.M[i].eval()
+
+        if self.extra_args.get('eval')[4]:
+            fname  = self.extra_args.get("file")[4]
+            fextra = self.extra_args.get("extra")[4]            
+            self.info[4] = np.load(RT + "/" + fextra, allow_pickle=True)
+            self.M[4]    = joblib.load(RT + "/" + fname)
+
+
+        if self.extra_args.get('eval')[5]:
+            fname  = self.extra_args.get("file")[5]
+            fextra = self.extra_args.get("extra")[5]
+            self.info[5] = np.load(RT + "/" + fextra,allow_pickle=True)
+            self.M[5]    = joblib.load(RT + "/" + fname)
+
 
     def get_allow_agnostic(self):
         return True
 
-    def predict(self,model,X, extrainfo):
+    def predict_cmb(self,model,X, einfo):
         device = 'cpu'
-        
-        X_mean=torch.Tensor(extrainfo.item()['X_mean']).to(device)
-        
-        X_std=torch.Tensor(extrainfo.item()['X_std']).to(device)
-        
-        Y_mean=torch.Tensor(extrainfo.item()['Y_mean']).to(device)
-        
-        Y_std=torch.Tensor(extrainfo.item()['Y_std']).to(device)
-    
+        X_mean=torch.Tensor(einfo.item()['X_mean']).to(device)
+        X_std=torch.Tensor(einfo.item()['X_std']).to(device)
+        Y_mean=torch.Tensor(einfo.item()['Y_mean']).to(device)
+        Y_std=torch.Tensor(einfo.item()['Y_std']).to(device)
         X = torch.Tensor(X).to(device)
-
         with torch.no_grad():
             X_norm = (X - X_mean)/X_std
             X_norm=torch.nan_to_num(X_norm, nan=0)
             X_norm.to(device)
             M_pred = model(X_norm).to(device)
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
-
-    def scaletrans(self,y_pred,X):
-        return y_pred*np.exp(X[self.ordering.index('logA')])/np.exp(2*X[self.ordering.index('tau')])
         
     def calculate(self, state, want_derived=False, **params):
-        cmb_param = params.copy()
+        par = params.copy()
 
-        if 'H0' not in cmb_param:
-            if self.testh0 < 0:
-                # This is the file that contains GP model for theta to H0
-                self.PATH7 = self.ROOT + "/" + self.extra_args.get('GPfilename')
-                self.thetaordering = self.extra_args.get('thetaordering')
+        # theta_star calculation begins ---------------------------
+        if self.extra_args.get('eval')[5]:
+            params = self.extra_args.get('ord')[5]
+            p =  np.array([par[key] for key in params])-self.info[5].item()['X_mean']     
+            par["H0"]=self.M[5].predict(p/self.info[5].item()['X_std'])[0]*self.info[5].item()['Y_std'][0]+self.info[5].item()['Y_mean'][0]
+            par["omegam"]=(par["omegabh2"]+par["omegach2"])/(par["H0"]/100)**2+par["mnu"]*(3.046/3)**0.75/94.0708
+            state["H0"]=par["H0"]
+            state["omegam"]=par["omegam"]
+        # theta_star calculation ends ---------------------------
 
-                # load GP model for theta to H0
-                self.model7 = joblib.load(self.PATH7) 
-
-                self.extrainfo_GP = np.load(self.ROOT + 
-                                            "/"  + 
-                                            self.extra_args.get('GPextraname'), 
-                                                                allow_pickle=True)
-            self.testh0 = 1
-
-
-
-            vt =  np.array([cmb_param[key] for key in self.thetaordering]) - self.extrainfo_GP.item()['X_mean']
-                    
-            cmb_param["H0"]= self.model7.predict(vt/self.extrainfo_GP.item()['X_std'])[0]*self.extrainfo_GP.item()['Y_std'][0] + self.extrainfo_GP.item()['Y_mean'][0]
-
-        cmb_params = np.array([cmb_param[key] for key in self.ordering])
-
+        # cl calculation begins ---------------------------
         state["ell"] = self.ell.astype(int)
-        state["tt"] = np.zeros(self.lmax_theory)
-        state["te"] = np.zeros(self.lmax_theory)
-        state["bb"] = np.zeros(self.lmax_theory)
-        state["ee"] = np.zeros(self.lmax_theory)
-        state["tt"][2:self.ell_max] = self.scaletrans(self.predict(self.model1,
-                                                           cmb_params,
-                                                           self.extrainfo_TT), 
-                                              cmb_params)[0]
-        state["te"][2:self.ell_max] = self.scaletrans(self.predict(self.model2, 
-                                                           cmb_params, 
-                                                           self.extrainfo_TE), 
-                                              cmb_params)[0]
-        state["ee"][2:self.ell_max] = self.scaletrans(self.predict(self.model3, 
-                                                           cmb_params, 
-                                                           self.extrainfo_EE), 
-                                              cmb_params)[0]
+        state["bb"]  = np.zeros(self.lmax_theory)
+        state["tt"]  = np.zeros(self.lmax_theory)
+        state["te"]  = np.zeros(self.lmax_theory)
+        state["ee"]  = np.zeros(self.lmax_theory)
+        cmb  = ['tt', 'te', 'ee', 'pp']
+        for i in range(3):
+            if self.extra_args.get('eval')[i]:
+                state[cmb[i]] = np.zeros(self.lmax_theory)
+                params = self.extra_args.get('ord')[i]
+                p = np.array([par[key] for key in params])
+                logAs  = p[params.index('logA')]
+                tau    = p[params.index('tau')]
+                amp    = np.exp(logAs)/np.exp(2*tau)
+                ellmax = self.extra_args.get('extrapar')[i]['ellmax']
+                state[cmb[i]][2:ellmax] = self.predict_cmb(self.M[i], p, self.info[i])*amp
         state["et"] = state["te"]
+        # cl calculation ends ---------------------------
 
+        # rd calculation begins ---------------------------
+        if self.extra_args.get('eval')[4]:
+            params = self.extra_args.get('ord')[4]
+            X_mean = self.info[4].item()['X_mean']
+            Y_mean = self.info[4].item()['Y_mean']
+            X_std  = self.info[4].item()['X_std']
+            Y_std  = self.info[4].item()['Y_std']
+            p  = np.array([par[key] for key in params]) - X_mean
+            rd = self.M[4].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
+            state['rdrag']   = rd
+            state["derived"] = {"rdrag": rd}
+        # cl calculation ends ---------------------------
         return True
+    
+    def get_can_provide_params(self):
+        return ['H0','omegam','rdrag']
+
+    def requested(self):
+        return self._must_provide
+
+    def get_H0(self):
+        state = self.current_state.copy()
+        return state["H0"]
+
+    def get_omegam(self):
+        state = self.current_state.copy()
+        return state["omegam"]
+
+    def get_rdrag(self):
+        return self.M[4].predict(vd/self.info[4].item()['X_std'])[0]*self.info[4].item()['Y_std'][0]+self.info[4].item()['Y_mean'][0]
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
         cls_old = self.current_state.copy()
-        
-        cls_dict = { k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb" ] }
+    
+        cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb" ]}
         cls_dict["ell"] = self.ell
         
         ls = self.ell
@@ -189,9 +167,7 @@ class emulcmb(Theory):
             unit=1
         else:
             for k in [ "tt", "te", "ee" , "et" , "bb" ]:
-            
                 unit = self.cmb_unit_factor(k, units, Tcmb)
-            
                 cls_dict[k] = cls_dict[k] * unit
         
         return cls_dict
@@ -254,9 +230,7 @@ class emulcmb(Theory):
             res *= self._cmb_unit_factor(units, Tcmb)
         elif y == "p":
             res *= 1. / np.sqrt(2.0 * np.pi)
-        
         return res
     
     def get_can_support_params(self):
         return [ "omega_b", "omega_cdm", "h", "logA", "ns", "tau_reio" ]
-    
