@@ -57,7 +57,7 @@ class emulbaosn(Theory):
                 self.req.extend(self.ord[i])
         
         self.req = list(set(self.req))
-        d = {}
+        d = {'rdrag': None} if self.extra_args.get('eval')[1] else {}
         for i in self.req:
             d[i] = None
         self.req = d
@@ -86,9 +86,6 @@ class emulbaosn(Theory):
    
     def calculate(self, state, want_derived=True, **params):       
         par = params.copy()
-        print(par)
-        print(state)
-
         out    = ["dl","H"]
         idx    = np.where(np.array(self.extra_args.get('eval'))[:2])[0]
         for i in idx:
