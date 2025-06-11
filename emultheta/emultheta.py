@@ -5,6 +5,7 @@ import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
 from cobaya.typing import InfoDict
+from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP
 import joblib
 import scipy
 from scipy import interpolate
@@ -35,12 +36,13 @@ class emultheta(Theory):
         self.req.extend(self.ord[0])
 
         self.req = list(set(self.req))
-        d = {'mnu' : None}
+        d = {'omegamh2' : None}
         for i in self.req:
             d[i] = None
         self.req = d
 
     def get_requirements(self):
+        print(self.req)
         return self.req
 
     def calculate(self, state, want_derived=False, **params):
@@ -55,12 +57,10 @@ class emultheta(Theory):
         H0 = self.M[0].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
         
         h2       = (H0/100.0)**2
-        mnu      = par["mnu"]
-        omegach2 = par["omegach2"]
-        omegabh2 = par["omegabh2"]
+        omegamh2 = par["omegamh2"]
 
         par.update({"H0": H0})
-        par.update({"omegam": (omegabh2+omegach2)/h2+mnu*(3.046/3)**0.75/94.0708})   
+        par.update({"omegam": omegamh2/h2})   
         state.update({"H0": par["H0"]})
         state.update({"omegam": par["omegam"]})    
         state["derived"].update({"H0": par["H0"]})
