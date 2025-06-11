@@ -42,7 +42,6 @@ class emultheta(Theory):
         self.req = d
 
     def get_requirements(self):
-        print(self.req)
         return self.req
 
     def calculate(self, state, want_derived=False, **params):

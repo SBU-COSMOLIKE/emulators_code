@@ -42,7 +42,6 @@ class emulbaosn(Theory):
                 self.tmat[i] = np.load(ftmat, allow_pickle=True)
                 
                 self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
-                
                 self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
                                    output_dim = len(self.tmat[i]), 
                                    int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
