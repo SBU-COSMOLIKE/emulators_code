@@ -1,7 +1,7 @@
 import numpy as np
 import os, joblib
 
-class emultheta():    
+class emulrdrag():    
     def __init__(self, extra_args):
         self.extra_args = extra_args
         RT = os.environ.get("ROOTDIR")
@@ -22,15 +22,11 @@ class emultheta():
         X_std  = self.info[0].item()['X_std']
         Y_std  = self.info[0].item()['Y_std']
         p =  np.array([par[key] for key in self.ord[0]]) - X_mean     
-        H0 = self.M[0].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
-        state.update({"H0": H0})
-        state.update({"omegam": par["omegamh2"]/(H0/100.0)**2})
+        rd = self.M[0].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
+        state.update({'rdrag':rd})
+        
         return state
 
-    def get_H0(self, params):
+    def get_rdrag(self, params):
         state = self.calculate(params)
-        return state["H0"]
-
-    def get_omegam(self, params):
-        state = self.calculate(params)
-        return state["omegam"]
+        return state["rdrag"] 

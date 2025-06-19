@@ -1,15 +1,8 @@
-import torch
-import torch.nn as nn
 import numpy as np
-import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+import os
 from cobaya.theory import Theory
 from cobaya.typing import InfoDict
 import joblib
-import scipy
-from scipy import interpolate
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
@@ -58,8 +51,5 @@ class emulrdrag(Theory):
         return True
 
     def get_rdrag(self):
-        X_std  = self.info[4].item()['X_std']
-        Y_std  = self.info[4].item()['Y_std']
-        Y_mean = self.info[4].item()['Y_mean']
-        return self.M[4].predict(vd/X_std)[0]*Y_std[0] + Y_mean[0]
- 
+        state = self.current_state.copy()
+        return state["rdrag"]
