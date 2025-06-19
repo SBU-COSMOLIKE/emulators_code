@@ -1,19 +1,13 @@
 import torch, os
 import torch.nn as nn
 import numpy as np
-from cobaya.theory import Theory
 from cobaya.theories.emulcmb.emulator import ResBlock, ResMLP, TRF, CNNMLP
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
-class emulcmb(Theory):
-    renames: Mapping[str, str] = empty_dict
-    extra_args: InfoDict = { }
-    _must_provide: dict
-    path: str
-    
-    def initialize(self):
-        super().initialize()
+class emulcmb():    
+    def __init__(self, extra_args):
+        self.extra_args = extra_args
         RT = os.environ.get("ROOTDIR")
         self.lmax_theory = 9052
         self.ell         = np.arange(0,self.lmax_theory,1)
@@ -22,7 +16,6 @@ class emulcmb(Theory):
         self.M     = [None, None, None, None]
         self.info  = [None, None, None, None]
         self.ord   = [None, None, None, None]
-        self.req   = [] 
 
         for i in range(3):
             if self.extra_args.get('eval')[i]:
@@ -47,18 +40,8 @@ class emulcmb(Theory):
                 self.M[i] = self.M[i].module.to('cpu')
                 self.M[i].eval()
                 self.ord[i] = self.extra_args.get('ord')[i]
-                self.req.extend(self.ord[i])
 
-        self.req = list(set(self.req))
-        d = {}
-        for i in self.req:
-            d[i] = None
-        self.req = d
-
-    def get_requirements(self):
-        return self.req
-
-    def predict_cmb(self,model,X, einfo):
+    def predict_cmb(self, model, X, einfo):
         device = 'cpu'
         X_mean=torch.Tensor(einfo.item()['X_mean']).to(device)
         X_std=torch.Tensor(einfo.item()['X_std']).to(device)
@@ -72,11 +55,10 @@ class emulcmb(Theory):
             M_pred = model(X_norm).to(device)
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
         
-    def calculate(self, state, want_derived=False, **params):
-        par = params.copy()
+    def calculate(self, par):
+        state = {}
 
-        # cl calculation begins ---------------------------
-        state["ell"] = self.ell.astype(int)
+        state.update({"ell": self.ell.astype(int)})
         cmb  = ['tt', 'te', 'ee', 'pp', 'bb']
         state.update({cmb[i]: np.zeros(self.lmax_theory) for i in range(5)})
         
@@ -90,12 +72,11 @@ class emulcmb(Theory):
             lmax   = self.extra_args.get('extrapar')[i]['ellmax']
             state[cmb[i]][2:lmax] = self.predict_cmb(self.M[i], p, self.info[i])*norm
         state["et"] = state["te"]
-        # cl calculation ends ---------------------------
-        return True
 
-    def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
-        cls_old = self.current_state.copy()
-    
+        return state
+
+    def get_Cl(self, params, ell_factor=False, units="1", unit_included=True, Tcmb=2.7255):
+        cls_old = self.calculate(par=params)
         cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb" ]}
         cls_dict["ell"] = self.ell
         
@@ -114,6 +95,7 @@ class emulcmb(Theory):
             for k in [ "tt", "te", "ee" , "et" , "bb" ]:
                 unit = self.cmb_unit_factor(k, units, Tcmb)
                 cls_dict[k] = cls_dict[k] * unit
+        
         return cls_dict
         
     def ell_factor(self, ls: np.ndarray, spectra: str) -> np.ndarray:

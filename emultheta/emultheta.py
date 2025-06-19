@@ -1,16 +1,7 @@
-import torch
-import torch.nn as nn
 import numpy as np
-import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+import os, joblib
 from cobaya.theory import Theory
-from cobaya.typing import InfoDict
-from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP
 import joblib
-import scipy
-from scipy import interpolate
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
@@ -46,13 +37,11 @@ class emultheta(Theory):
 
     def calculate(self, state, want_derived=False, **params):
         par = params.copy()
-
-        params = self.ord[0]
         X_mean = self.info[0].item()['X_mean']
         Y_mean = self.info[0].item()['Y_mean']
         X_std  = self.info[0].item()['X_std']
         Y_std  = self.info[0].item()['Y_std']
-        p =  np.array([par[key] for key in params]) - X_mean     
+        p =  np.array([par[key] for key in self.ord[0]]) - X_mean     
         H0 = self.M[0].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
         
         h2       = (H0/100.0)**2
