@@ -15,6 +15,7 @@ class emulbaosn():
         self.tmat   = [None, None] # dl, H(z)
         self.offset = [None, None] # dl, H(z)
         self.ord    = [None, None] # dl, H(z)
+        self.device = self.extra_args.get("device")
         for i in range(2):
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]
@@ -31,28 +32,26 @@ class emulbaosn():
                                    output_dim = len(self.tmat[i]), 
                                    int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
                                    N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
-                self.M[i] = self.M[i].to('cpu')
+                self.M[i] = self.M[i].to(self.device)
                 self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(fname, map_location='cpu'))
-                self.M[i] = self.M[i].module.to('cpu')
+                self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
+                self.M[i] = self.M[i].module.to(self.device)
                 self.M[i].eval()
                 self.ord[i] = self.extra_args.get('ord')[i]
 
-
     def predict(self, model, X, extrainfo, transform_matrix, offset):
-        device   = 'cpu'
-        X_mean   = torch.Tensor(extrainfo.item()['X_mean']).to(device)
-        X_std    = torch.Tensor(extrainfo.item()['X_std']).to(device)
+        X_mean   = torch.Tensor(extrainfo.item()['X_mean']).to(self.device)
+        X_std    = torch.Tensor(extrainfo.item()['X_std']).to(self.device)
         Y_mean   = extrainfo.item()['Y_mean']
         Y_std    = extrainfo.item()['Y_std']
-        Y_mean_2 = torch.Tensor(extrainfo.item()['Y_mean_2']).to(device)
-        Y_std_2  = torch.Tensor(extrainfo.item()['Y_std_2']).to(device)
-        X = torch.Tensor(X).to(device)
+        Y_mean_2 = torch.Tensor(extrainfo.item()['Y_mean_2']).to(self.device)
+        Y_std_2  = torch.Tensor(extrainfo.item()['Y_std_2']).to(self.device)
+        X = torch.Tensor(X).to(self.device)
         with torch.no_grad():
             X_norm = ((X - X_mean) / X_std)
-            X_norm.to(device)
+            X_norm.to(self.device)
             pred = model(X_norm)
-            M_pred = pred.to(device)
+            M_pred = pred.to(self.device)
             y_pred = (M_pred.float() *Y_std_2.float()+Y_mean_2.float()).cpu().numpy()
             y_pred = np.matmul(y_pred,transform_matrix)*Y_std+Y_mean
             y_pred = np.exp(y_pred) - offset
