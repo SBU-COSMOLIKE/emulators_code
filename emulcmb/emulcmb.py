@@ -23,6 +23,7 @@ class emulcmb(Theory):
         self.info  = [None, None, None, None]
         self.ord   = [None, None, None, None]
         self.req   = [] 
+        self.device = self.extra_args.get("device")
 
         for i in range(3):
             if self.extra_args.get('eval')[i]:
@@ -41,10 +42,10 @@ class emulcmb(Theory):
                                        output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
                                        int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
                                        cnn_dim=self.extra_args.get('extrapar')[i]['INTCNN'])
-                self.M[i] = self.M[i].to('cpu')
+                self.M[i] = self.M[i].to(self.device)
                 self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(fname, map_location='cpu'))
-                self.M[i] = self.M[i].module.to('cpu')
+                self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
+                self.M[i] = self.M[i].module.to(self.device)
                 self.M[i].eval()
                 self.ord[i] = self.extra_args.get('ord')[i]
                 self.req.extend(self.ord[i])
@@ -59,17 +60,16 @@ class emulcmb(Theory):
         return self.req
 
     def predict_cmb(self,model,X, einfo):
-        device = 'cpu'
-        X_mean=torch.Tensor(einfo.item()['X_mean']).to(device)
-        X_std=torch.Tensor(einfo.item()['X_std']).to(device)
-        Y_mean=torch.Tensor(einfo.item()['Y_mean']).to(device)
-        Y_std=torch.Tensor(einfo.item()['Y_std']).to(device)
-        X = torch.Tensor(X).to(device)
+        X_mean=torch.Tensor(einfo.item()['X_mean']).to(self.device)
+        X_std=torch.Tensor(einfo.item()['X_std']).to(self.device)
+        Y_mean=torch.Tensor(einfo.item()['Y_mean']).to(self.device)
+        Y_std=torch.Tensor(einfo.item()['Y_std']).to(self.device)
+        X = torch.Tensor(X).to(self.device)
         with torch.no_grad():
             X_norm = (X - X_mean)/X_std
             X_norm=torch.nan_to_num(X_norm, nan=0)
-            X_norm.to(device)
-            M_pred = model(X_norm).to(device)
+            X_norm.to(self.device)
+            M_pred = model(X_norm).to(self.device)
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
         
     def calculate(self, state, want_derived=False, **params):

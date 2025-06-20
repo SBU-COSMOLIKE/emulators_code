@@ -1,16 +1,10 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
-#from cobaya.theories.cosmo import BoltzmannBase
+import os
 from cobaya.theory import Theory
-from cobaya.theories.emulbaosn.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF
-import joblib
-import scipy
+from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
 from scipy import interpolate
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 
@@ -130,7 +124,3 @@ class emulbaosn(Theory):
         if units == "1/Mpc":
             H_arr /= 2.99792458e5
         return H_arr
-
-    def get_can_support_params(self):
-        return [ "omega_b", "omega_cdm", "h" ]
-  
