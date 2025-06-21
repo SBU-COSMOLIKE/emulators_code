@@ -25,6 +25,9 @@ class emulbaosn(Theory):
         self.ord    = [None, None] # dl, H(z)
         self.req    = [] 
         self.device = self.extra_args.get("device")
+        if self.device == "cuda":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
         for i in range(2):
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]

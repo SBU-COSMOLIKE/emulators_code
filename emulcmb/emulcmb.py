@@ -24,6 +24,8 @@ class emulcmb(Theory):
         self.ord   = [None, None, None, None]
         self.req   = [] 
         self.device = self.extra_args.get("device")
+        if self.device == "cuda":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         for i in range(3):
             if self.extra_args.get('eval')[i]:

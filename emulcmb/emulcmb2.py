@@ -17,6 +17,9 @@ class emulcmb():
         self.info   = [None, None, None, None]
         self.ord    = [None, None, None, None]
         self.device = self.extra_args.get("device")
+        if self.device == "cuda":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
         for i in range(3):
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]
