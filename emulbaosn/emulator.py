@@ -201,3 +201,96 @@ class TRF(nn.Module):
         out = self.trf(x)
         
         return out
+
+
+class CNNMLP(nn.Module):
+
+    def __init__(self, input_dim, output_dim, int_dim,cnn_dim):
+
+        super(CNNMLP, self).__init__()
+
+        modules = []
+        self.outdim = output_dim
+        self.cnn_dim = cnn_dim
+        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
+        int_dim = int_dim * 128
+        self.norm = Affine()
+        # Def: we will only change the dimension of the datavector using linear transformations  
+        self.input_layer = nn.Linear(input_dim, int_dim)
+        
+        # Def: by design, a pure block has the input and output dimension to be the same
+        self.Res1 = ResBlock(int_dim, int_dim)
+        self.Res2 = ResBlock(int_dim, int_dim)
+        self.Res3 = ResBlock(int_dim, int_dim)
+
+        self.CNNtrans = nn.Linear(int_dim,cnn_dim)
+
+        
+        # Def: the transformation from the internal dimension to the output dimension of the
+        #      data vector we intend to emulate
+        self.Act1 = Supact(int_dim)#nn.Tanh()
+        self.Act3 = Supact(int_dim)#nn.Tanh()
+        self.Act4 = Supact(int_dim)#nn.Tanh()
+
+
+        self.conv = nn.Conv1d(in_channels=1, out_channels=16, kernel_size=5,stride=16,padding=2)
+        self.Act2 = Supact(cnn_dim)
+
+        self.out_layer = nn.Linear(cnn_dim, self.outdim)
+
+        # NN.SEQUENTIAL is a PYTHORCH function DEFINED AT: https://pytorch.org/docs/stable/generated/torch.nn.Sequential.html
+        # This function stacks up layers in the modules-list in sequence to create the whole model
+    def forward(self, x):
+        #x is a cosmological parameter set you feed in the model
+        x = self.input_layer(x)
+        x = self.Res1(x)
+        x = self.Act1(x)
+        x = self.Res2(x)
+        x = self.Act3(x)
+        x = self.Res3(x)
+        x = self.Act4(x)
+        x = self.CNNtrans(x)
+        x = x.view(x.size(0), 1, -1)
+        x = self.conv(x)
+        x = x.view(x.size(0), self.cnn_dim)
+        x = self.Act2(x)        
+        out = self.out_layer(x)
+        out = self.norm(out)
+        return out
+
+class simpMLP(nn.Module):
+
+    def __init__(self, input_dim, output_dim, int_dim, N_layer):
+
+        super(simpMLP, self).__init__()
+
+        modules=[]
+
+        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
+        int_dim = int_dim
+
+        # Def: we will only change the dimension of the datavector using linear transformations  
+        modules.append(nn.Linear(input_dim, int_dim))
+        
+        # Def: by design, a pure block has the input and output dimension to be the same
+        for n in range(N_layer):
+            # Def: This is what we defined as a pure MLP block
+            # Why the Affine function?
+            #   R: this is for the Neuro-network to learn how to normalize the data between layer
+            modules.append(ResBlock(int_dim, int_dim))
+            modules.append(Supact(int_dim))
+        
+        # Def: the transformation from the internal dimension to the output dimension of the
+        #      data vector we intend to emulate
+        
+        modules.append(nn.Linear(int_dim, output_dim))
+        modules.append(Affine())
+        # NN.SEQUENTIAL is a PYTHORCH function DEFINED AT: https://pytorch.org/docs/stable/generated/torch.nn.Sequential.html
+        # This function stacks up layers in the modules-list in sequence to create the whole model
+        self.simpmlp =nn.Sequential(*modules)#
+
+    def forward(self, x):
+        #x is a cosmological parameter set you feed in the model
+        out = self.simpmlp(x)
+
+        return out
