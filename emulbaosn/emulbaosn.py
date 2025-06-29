@@ -7,6 +7,7 @@ from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
 from scipy import interpolate
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
+from cobaya.theories.emulbaosn.emulintegrate import composite_simpson, romberg_simpson
 
 class emulbaosn(Theory):
     renames: Mapping[str, str] = empty_dict
@@ -29,14 +30,14 @@ class emulbaosn(Theory):
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         for i in range(2):
+            fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
+            self.z[i]    = np.load(fzlin, allow_pickle=True)
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]
                 fextra = RT + "/" + self.extra_args.get("extra")[i]
-                fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
                 ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
                 
                 self.info[i] = np.load(fextra, allow_pickle=True)
-                self.z[i]    = np.load(fzlin, allow_pickle=True)
                 self.tmat[i] = np.load(ftmat, allow_pickle=True)
                 
                 self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
@@ -79,6 +80,13 @@ class emulbaosn(Theory):
             y_pred = np.matmul(y_pred,transform_matrix)*Y_std+Y_mean
             y_pred = np.exp(y_pred) - offset
         return y_pred[0]
+
+    def HtoDl(self, H):
+        c = 2.99792458e5
+        func = interpolate.CubicSpline(self.z[1],c/H)
+        zstep = np.arange(0,3,0.1)
+        dl = [(1 + zi) * romberg_simpson(func, 0, zi)[0] for zi in zstep]
+        return interpolate.CubicSpline(zstep,dl)
    
     def calculate(self, state, want_derived=True, **params):       
         par = params.copy()
@@ -87,10 +95,19 @@ class emulbaosn(Theory):
         for i in idx:
             params = self.extra_args.get('ord')[i]
             p = np.array([par[key] for key in params])
-            state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
+            if self.extra_args.get('eval')[i]:
+                state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
+        if not self.extra_args.get('eval')[0]:
+            print('integrate')
+            print(state["H"])
+            state[out[0]] = self.HtoDl(state["H"])(self.z[0])
+        print(state["dl"])
 
     def get_angular_diameter_distance(self, z):
+        #if self.extra_args.get('eval')[0]
         d_l = self.current_state["dl"].copy()
+        #else:
+            #d_l = self.HtoDl(state[out[1]])(self.z[0])
         d_a = d_l/(1.0 + self.z[0])**2
         D_A_interpolate = interpolate.interp1d(self.z[0], d_a)
         D_A = D_A_interpolate(z)
