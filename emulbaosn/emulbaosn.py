@@ -30,26 +30,28 @@ class emulbaosn(Theory):
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         for i in range(2):
-            fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
-            self.z[i]    = np.load(fzlin, allow_pickle=True)
+            
             if self.extra_args.get('eval')[i]:
-                fname  = RT + "/" + self.extra_args.get("file")[i]
-                fextra = RT + "/" + self.extra_args.get("extra")[i]
-                ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
                 
-                self.info[i] = np.load(fextra, allow_pickle=True)
-                self.tmat[i] = np.load(ftmat, allow_pickle=True)
+                fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
+                self.z[i]    = np.load(fzlin, allow_pickle=True)
                 
-                self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
-                self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
-                                   output_dim = len(self.tmat[i]), 
-                                   int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
-                                   N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
-                self.M[i] = self.M[i].to(self.device)
-                self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
-                self.M[i] = self.M[i].module.to(self.device)
-                self.M[i].eval()
+                if self.extra_args.get("method")[i] == "NN":
+                    fname  = RT + "/" + self.extra_args.get("file")[i]
+                    fextra = RT + "/" + self.extra_args.get("extra")[i]
+                    ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
+                    self.info[i] = np.load(fextra, allow_pickle=True)
+                    self.tmat[i] = np.load(ftmat, allow_pickle=True)
+                    self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
+                    self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
+                                       output_dim = len(self.tmat[i]), 
+                                       int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
+                                       N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
+                    self.M[i] = self.M[i].to(self.device)
+                    self.M[i] = nn.DataParallel(self.M[i])
+                    self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
+                    self.M[i] = self.M[i].module.to(self.device)
+                    self.M[i].eval()
 
                 self.ord[i] = self.extra_args.get('ord')[i]
                 self.req.extend(self.ord[i])
@@ -95,19 +97,13 @@ class emulbaosn(Theory):
         for i in idx:
             params = self.extra_args.get('ord')[i]
             p = np.array([par[key] for key in params])
-            if self.extra_args.get('eval')[i]:
+            if self.extra_args.get("method")[i] == "NN":
                 state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
-        if not self.extra_args.get('eval')[0]:
-            print('integrate')
-            print(state["H"])
+        if self.extra_args.get("method")[0] == "INT":
             state[out[0]] = self.HtoDl(state["H"])(self.z[0])
-        print(state["dl"])
 
     def get_angular_diameter_distance(self, z):
-        #if self.extra_args.get('eval')[0]
         d_l = self.current_state["dl"].copy()
-        #else:
-            #d_l = self.HtoDl(state[out[1]])(self.z[0])
         d_a = d_l/(1.0 + self.z[0])**2
         D_A_interpolate = interpolate.interp1d(self.z[0], d_a)
         D_A = D_A_interpolate(z)
