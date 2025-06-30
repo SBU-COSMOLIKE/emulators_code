@@ -27,7 +27,9 @@ class emultheta(Theory):
         self.info   = [None]
         self.ord    = [None]
         self.req    = [] 
-        self.device = 'cpu'
+        self.device = self.extra_args.get("device")
+        if self.device == "cuda":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         fname  = RT + "/" + self.extra_args.get("file")[0]
         fextra = RT + "/" + self.extra_args.get("extra")[0]
