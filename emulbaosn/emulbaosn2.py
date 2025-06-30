@@ -4,6 +4,7 @@ import numpy as np
 import os
 from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
 from scipy import interpolate
+from cobaya.theories.emulbaosn.emulintegrate import composite_simpson, romberg_simpson
 
 class emulbaosn():    
     def __init__(self, extra_args):
@@ -21,25 +22,26 @@ class emulbaosn():
 
         for i in range(2):
             if self.extra_args.get('eval')[i]:
-                fname  = RT + "/" + self.extra_args.get("file")[i]
-                fextra = RT + "/" + self.extra_args.get("extra")[i]
                 fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
-                ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
-                
-                self.info[i] = np.load(fextra, allow_pickle=True)
                 self.z[i]    = np.load(fzlin, allow_pickle=True)
-                self.tmat[i] = np.load(ftmat, allow_pickle=True)
                 
-                self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
-                self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
-                                   output_dim = len(self.tmat[i]), 
-                                   int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
-                                   N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
-                self.M[i] = self.M[i].to(self.device)
-                self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
-                self.M[i] = self.M[i].module.to(self.device)
-                self.M[i].eval()
+                if self.extra_args.get("method")[i] == "NN":
+                    fname  = RT + "/" + self.extra_args.get("file")[i]
+                    fextra = RT + "/" + self.extra_args.get("extra")[i]
+                    ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
+                    self.info[i] = np.load(fextra, allow_pickle=True)
+                    self.tmat[i] = np.load(ftmat, allow_pickle=True)
+                    self.offset[i] = self.extra_args.get('extrapar')[i]['offset']
+                    self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
+                                       output_dim = len(self.tmat[i]), 
+                                       int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
+                                       N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
+                    self.M[i] = self.M[i].to(self.device)
+                    self.M[i] = nn.DataParallel(self.M[i])
+                    self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
+                    self.M[i] = self.M[i].module.to(self.device)
+                    self.M[i].eval()
+
                 self.ord[i] = self.extra_args.get('ord')[i]
 
     def predict(self, model, X, extrainfo, transform_matrix, offset):
@@ -60,6 +62,13 @@ class emulbaosn():
             y_pred = np.exp(y_pred) - offset
         return y_pred[0]
    
+    def HtoDl(self, H):
+        c = 2.99792458e5
+        func = interpolate.CubicSpline(self.z[1],c/H)
+        zstep = np.arange(0,3,0.1)
+        dl = [(1 + zi) * romberg_simpson(func, 0, zi)[0] for zi in zstep]
+        return interpolate.CubicSpline(zstep,dl)
+
     def calculate(self, par):       
         state = {}
         out    = ["dl","H"]
@@ -67,8 +76,10 @@ class emulbaosn():
         for i in idx:
             params = self.extra_args.get('ord')[i]
             p = np.array([par[key] for key in params])
-            pred = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
-            state.update({out[i]: pred})
+            if self.extra_args.get("method")[i] == "NN":
+                state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
+        if self.extra_args.get("method")[0] == "INT":
+            state[out[0]] = self.HtoDl(state["H"])(self.z[0])
         return state
 
     def get_angular_diameter_distance(self, z):
