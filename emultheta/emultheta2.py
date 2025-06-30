@@ -62,7 +62,7 @@ class emultheta():
         h2       = (H0/100.0)**2
         omegamh2 = par["omegamh2"]
 
-        state.update({"H0": par["H0"]})
+        state.update({"H0": H0})
         state.update({"omegam": omegamh2/h2})    
    
         return state
