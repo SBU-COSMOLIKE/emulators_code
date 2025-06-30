@@ -258,7 +258,7 @@ class CNNMLP(nn.Module):
         out = self.norm(out)
         return out
 
-class simpMLP(nn.Module):
+class ResMLP2(nn.Module):
 
     def __init__(self, input_dim, output_dim, int_dim, N_layer):
 

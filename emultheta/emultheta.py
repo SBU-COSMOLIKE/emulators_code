@@ -5,7 +5,7 @@ import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
 from cobaya.typing import InfoDict
-from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP, simpMLP
+from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP, ResMLP2
 import joblib
 import scipy
 from scipy import interpolate
@@ -38,10 +38,10 @@ class emultheta(Theory):
         self.MLA = self.extra_args.get('extrapar')[0]['MLA']
         if self.MLA == "GP":
             self.M[0]    = joblib.load(fname)
-        elif self.MLA == "simpMLP":
+        elif self.MLA == "ResMLP":
             intdim = self.extra_args.get('extrapar')[0]['INTDIM']
             Nlayer = self.extra_args.get('extrapar')[0]['NLAYER']
-            self.M[0] = simpMLP(input_dim=len(self.ord[0]),output_dim=1,int_dim=intdim,N_layer=Nlayer)
+            self.M[0] = ResMLP2(input_dim=len(self.ord[0]),output_dim=1,int_dim=intdim,N_layer=Nlayer)
             self.M[0] = self.M[0].to(self.device)
             self.M[0] = nn.DataParallel(self.M[0])
             self.M[0].load_state_dict(torch.load(fname, map_location=self.device))
@@ -80,7 +80,7 @@ class emultheta(Theory):
         p =  np.array([par[key] for key in params]) - X_mean
         if self.MLA == "GP":
             H0 = self.M[0].predict(p/X_std)[0]*Y_std[0] + Y_mean[0]
-        elif self.MLA == "simpMLP":
+        elif self.MLA == "ResMLP":
             p0 = p/X_std
             H0 = self.predict(p0, Y_mean, Y_std, self.M[0])[0][0]
         

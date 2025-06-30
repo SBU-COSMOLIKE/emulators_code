@@ -4,7 +4,6 @@ import numpy as np
 import os
 from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
 from scipy import interpolate
-from cobaya.theories.emulbaosn.emulintegrate import composite_simpson, romberg_simpson
 
 class emulbaosn():    
     def __init__(self, extra_args):
@@ -17,6 +16,7 @@ class emulbaosn():
         self.offset = [None, None] # dl, H(z)
         self.ord    = [None, None] # dl, H(z)
         self.device = self.extra_args.get("device")
+        self.zstep = np.arange(0,3,0.01)
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -64,10 +64,14 @@ class emulbaosn():
    
     def HtoDl(self, H):
         c = 2.99792458e5
-        func = interpolate.CubicSpline(self.z[1],c/H)
-        zstep = np.arange(0,3,0.1)
-        dl = [(1 + zi) * romberg_simpson(func, 0, zi)[0] for zi in zstep]
-        return interpolate.CubicSpline(zstep,dl)
+        func = interpolate.interp1d(self.z[1],c/H,fill_value="extrapolate")
+        integrand = func(self.zstep)
+        dl = np.zeros(len(self.zstep))
+        dz = (self.zstep[1] - self.zstep[0])  # assuming uniform spacing
+        trapezoids = dz / 2 * (integrand[:-1] + integrand[1:])
+        dl[1:] = np.cumsum(trapezoids)
+        dl*=(1+self.zstep)
+        return interpolate.interp1d(self.zstep,dl,fill_value="extrapolate")
 
     def calculate(self, par):       
         state = {}
