@@ -8,6 +8,7 @@ class emultheta():
         self.M      = [None]
         self.info   = [None]
         self.ord    = [None]
+        self.device = self.extra_args.get("device")
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
