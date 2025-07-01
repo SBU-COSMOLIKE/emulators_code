@@ -16,7 +16,7 @@ class emulbaosn():
         self.offset = [None, None] # dl, H(z)
         self.ord    = [None, None] # dl, H(z)
         self.device = self.extra_args.get("device")
-        self.zstep = np.arange(0,3,0.01)
+        self.zstep = np.arange(0,3,0.0048)
         self.dz = (self.zstep[1] - self.zstep[0])  # assuming uniform spacing
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -67,9 +67,13 @@ class emulbaosn():
         c = 2.99792458e5
         func = interpolate.interp1d(self.z[1],c/H,fill_value="extrapolate")
         integrand = func(self.zstep)
-        dl = np.zeros(len(self.zstep))
-        trapezoids = self.dz / 2 * (integrand[:-1] + integrand[1:])
-        dl[1:] = np.cumsum(trapezoids)
+        dl = np.zeros_like(integrand)
+        f0 = integrand[0:-2:2]
+        f1 = integrand[1:-1:2]
+        f2 = integrand[2::2]
+        simpson_chunks = self.dz / 3 * (f0 + 4 * f1 + f2)
+        dl[2::2] = np.cumsum(simpson_chunks)
+        dl[1::2] = (dl[0:-2:2] + dl[2::2]) / 2
         dl*=(1+self.zstep)
         return interpolate.interp1d(self.zstep,dl,fill_value="extrapolate")
 
