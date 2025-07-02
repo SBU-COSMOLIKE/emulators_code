@@ -22,12 +22,13 @@ class emulcmb(Theory):
         self.M     = [None, None, None, None]
         self.info  = [None, None, None, None]
         self.ord   = [None, None, None, None]
+        self.tmat   = [None, None, None, None]
         self.req   = [] 
         self.device = self.extra_args.get("device")
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        for i in range(3):
+        for i in range(4):
             if self.extra_args.get('eval')[i]:
                 fname  = RT + "/" + self.extra_args.get("file")[i]
                 fextra = RT + "/" + self.extra_args.get("extra")[i]
@@ -44,6 +45,13 @@ class emulcmb(Theory):
                                        output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
                                        int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
                                        cnn_dim=self.extra_args.get('extrapar')[i]['INTCNN'])
+                elif self.extra_args.get('extrapar')[i]['MLA'] == 'ResMLP':
+                    ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
+                    self.tmat[i] = np.load(ftmat, allow_pickle=True)
+                    self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
+                                       output_dim = len(self.tmat[i]), 
+                                       int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
+                                       N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
                 self.M[i] = self.M[i].to(self.device)
                 self.M[i] = nn.DataParallel(self.M[i])
                 self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
@@ -73,6 +81,22 @@ class emulcmb(Theory):
             X_norm.to(self.device)
             M_pred = model(X_norm).to(self.device)
         return (M_pred.float()*Y_std.float() + Y_mean.float()).cpu().numpy()
+
+    def predict_phi(self,model,X,einfo,tmat):
+        X_mean=torch.Tensor(einfo.item()['X_mean']).to(self.device)
+        X_std=torch.Tensor(einfo.item()['X_std']).to(self.device)
+        Y_mean=einfo.item()['Y_mean']
+        Y_std=einfo.item()['Y_std']
+        Y_mean_2=torch.Tensor(einfo.item()['Y_mean_2']).to(self.device)
+        Y_std_2=torch.Tensor(einfo.item()['Y_std_2']).to(self.device)
+        X = torch.Tensor(X).to(self.device)
+        with torch.no_grad():
+            X_norm = (X - X_mean)/X_std
+            X_norm=torch.nan_to_num(X_norm, nan=0)
+            X_norm.to(self.device)
+            M_pred = model(X_norm).to(self.device)
+        y_pred = (M_pred.float()*Y_std_2.float() + Y_mean_2.float()).cpu().numpy()
+        return np.exp(np.matmul(y_pred, tmat)*Y_std+Y_mean)
         
     def calculate(self, state, want_derived=False, **params):
         par = params.copy()
@@ -92,15 +116,18 @@ class emulcmb(Theory):
             lmax   = self.extra_args.get('extrapar')[i]['ellmax']
             state[cmb[i]][2:lmax] = self.predict_cmb(self.M[i], p, self.info[i])*norm
         state["et"] = state["te"]
+        if self.extra_args.get('eval')[3]:
+            phiphi = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
+            state["pp"][2:len(phiphi)+2] = phiphi
         # cl calculation ends ---------------------------
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
         cls_old = self.current_state.copy()
     
-        cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb" ]}
+        cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]}
         cls_dict["ell"] = self.ell
-        
+        cls_dict["pp"] = cls_old["pp"] if "pp" in cls_old else np.zeros(self.lmax_theory)
         ls = self.ell
         
         if ell_factor:
