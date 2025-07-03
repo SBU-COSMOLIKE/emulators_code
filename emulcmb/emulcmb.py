@@ -101,7 +101,6 @@ class emulcmb(Theory):
     def calculate(self, state, want_derived=False, **params):
         par = params.copy()
 
-        # cl calculation begins ---------------------------
         state["ell"] = self.ell.astype(int)
         cmb  = ['tt', 'te', 'ee', 'pp', 'bb']
         state.update({cmb[i]: np.zeros(self.lmax_theory) for i in range(5)})
@@ -119,9 +118,8 @@ class emulcmb(Theory):
         if self.extra_args.get('eval')[3]:
             phiphi = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
             ell_p = np.arange(2,len(phiphi)+2,1)
-            pp_to_kk_factor = (ell_p*(ell_p+1))**2/4
+            pp_to_kk_factor = (ell_p*(ell_p+1))**2/(2*np.pi)
             state["pp"][2:len(phiphi)+2] = phiphi/pp_to_kk_factor
-        # cl calculation ends ---------------------------
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
