@@ -118,7 +118,9 @@ class emulcmb(Theory):
         state["et"] = state["te"]
         if self.extra_args.get('eval')[3]:
             phiphi = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
-            state["pp"][2:len(phiphi)+2] = phiphi
+            ell_p = np.arange(2,len(phiphi)+2,1)
+            pp_to_kk_factor = (ell_p*(ell_p+1))**2/4
+            state["pp"][2:len(phiphi)+2] = phiphi/pp_to_kk_factor
         # cl calculation ends ---------------------------
         return True
 
@@ -127,6 +129,7 @@ class emulcmb(Theory):
     
         cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]}
         cls_dict["ell"] = self.ell
+        
         cls_dict["pp"] = cls_old["pp"] if "pp" in cls_old else np.zeros(self.lmax_theory)
         ls = self.ell
         
