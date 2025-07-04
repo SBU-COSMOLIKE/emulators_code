@@ -35,7 +35,6 @@ class emulbaosn(Theory):
         if self.extra_args.get('eval')[i]:
             fzlin  = RT + "/" + self.extra_args.get("zlin")[i]
             self.z[i]    = np.load(fzlin, allow_pickle=True)
-            
             fname  = RT + "/" + self.extra_args.get("file")[i]
             fextra = RT + "/" + self.extra_args.get("extra")[i]
             ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
@@ -51,7 +50,6 @@ class emulbaosn(Theory):
             self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
             self.M[i] = self.M[i].module.to(self.device)
             self.M[i].eval()
-            
             self.ord[i] = self.extra_args.get('ord')[i]
             self.req.extend(self.ord[i])
         # SN ------------------------------------------------------------
@@ -80,9 +78,14 @@ class emulbaosn(Theory):
                 self.ord[i] = self.extra_args.get('ord')[i]
                 self.req.extend(self.ord[i])
             elif self.extra_args.get("method")[i] == "INT":
-                if !self.extra_args.get('eval')[0]:
-                    raise ValueError('Wrong Flag - cant integrate H(z)')
-                self.z[i] = np.linspace(0.0001, 3.0, 600)
+                if not self.extra_args.get('eval')[0]:
+                    raise ValueError('wrong flag - cant integrate H(z)')
+                zmin = self.extra_args.get('extrapar')[i]['ZMIN']
+                zmax = self.extra_args.get('extrapar')[i]['ZMAX']
+                if (zmax > self.z[1][-1]):
+                    zmax = self.z[1][-1]
+                NZ   = self.extra_args.get('extrapar')[i]['NZ']
+                self.z[i] = np.linspace(zmin, zmax, NZ)
                 self.ord[i] = self.extra_args.get('ord')[1] # Same as H(z)
                 self.req.extend(self.ord[i])
 

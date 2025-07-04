@@ -71,9 +71,14 @@ class emulbaosn():
                 self.ord[i] = self.extra_args.get('ord')[i]
                 self.req.extend(self.ord[i])
             elif self.extra_args.get("method")[i] == "INT":
-                if !self.extra_args.get('eval')[0]:
-                    raise ValueError('Wrong Flag - cant integrate H(z)')
-                self.z[i] = np.linspace(0.0001, 3.0, 600)
+                if not self.extra_args.get('eval')[0]:
+                    raise ValueError('wrong flag - cant integrate H(z)')
+                zmin = self.extra_args.get('extrapar')[i]['ZMIN']
+                zmax = self.extra_args.get('extrapar')[i]['ZMAX']
+                if (zmax > self.z[1][-1]):
+                    zmax = self.z[1][-1]
+                NZ   = self.extra_args.get('extrapar')[i]['NZ']
+                self.z[i] = np.linspace(zmin, zmax, NZ)
                 self.ord[i] = self.extra_args.get('ord')[1] # Same as H(z)
                 self.req.extend(self.ord[i])
 
