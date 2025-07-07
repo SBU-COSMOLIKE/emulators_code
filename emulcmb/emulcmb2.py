@@ -12,45 +12,86 @@ class emulcmb():
         self.lmax_theory = 9052
         self.ell         = np.arange(0,self.lmax_theory,1)
         # TT, TE, EE, PHIPHI 
-        self.eval   = [False, False, False, False]
-        self.M      = [None, None, None, None]
-        self.info   = [None, None, None, None]
-        self.ord    = [None, None, None, None]
+        imax = 4
+        self.eval = [False, False, False, False]
+        for name in ("M", "info", "ord", "tmat", "extrapar"):
+            setattr(self, name, [None] * 4)
         self.device = self.extra_args.get("device")
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        for i in range(4):
-            if self.extra_args.get('eval')[i]:
-                fname  = RT + "/" + self.extra_args.get("file")[i]
-                fextra = RT + "/" + self.extra_args.get("extra")[i]
-                self.info[i] = np.load(fextra, allow_pickle=True)
+        if (teval := self.extra_args.get('eval')) is not None:
+            for i in range(imax):
+                self.eval[i] = (i<len(teval)) and bool(teval[i])
+        self.eval = np.array(self.eval, dtype=bool)
 
-                if self.extra_args.get('extrapar')[i]['MLA'] == 'TRF':
-                    self.M[i] = TRF(input_dim=len(self.extra_args.get('ord')[i]),
-                        output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
-                        int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
-                        int_trf=self.extra_args.get('extrapar')[i]['INTTRF'],
-                        N_channels=self.extra_args.get('extrapar')[i]['NCTRF'])
-                elif self.extra_args.get('extrapar')[i]['MLA'] == 'CNN':
-                    self.M[i] = CNNMLP(input_dim=len(self.extra_args.get('ord')[i]),
-                                       output_dim=self.extra_args.get('extrapar')[i]['ellmax']-2,
-                                       int_dim=self.extra_args.get('extrapar')[i]['INTDIM'],
-                                       cnn_dim=self.extra_args.get('extrapar')[i]['INTCNN'])
-                elif self.extra_args.get('extrapar')[i]['MLA'] == 'ResMLP':
-                    ftmat  = RT + "/" + self.extra_args.get("tmat")[i]
-                    self.tmat[i] = np.load(ftmat, allow_pickle=True)
-                    self.M[i] = ResMLP(input_dim  = len(self.extra_args.get('ord')[i]), 
-                                       output_dim = len(self.tmat[i]), 
-                                       int_dim    = self.extra_args.get('extrapar')[i]['INTDIM'], 
-                                       N_layer    = self.extra_args.get('extrapar')[i]['NLAYER'])
-                self.M[i] = self.M[i].to(self.device)
-                self.M[i] = nn.DataParallel(self.M[i])
-                self.M[i].load_state_dict(torch.load(fname, map_location=self.device))
-                self.M[i] = self.M[i].module.to(self.device)
-                self.M[i].eval()
-                self.ord[i] = self.extra_args.get('ord')[i]
-
+        # BASIC CHECKS BEGINS ------------------------------------------------
+        _required_lists = [
+            ("extra", "Emulator CMB: Missing emulator file (extra) option"),
+            ("ord", "Emulator CMB: Missing ord (parameter ordering) option"),
+            ("file", "Emulator CMB: Missing emulator file option"),
+            ("extrapar", "Emulator CMB: Missing extrapar option"),
+        ]
+        _mla_requirements = {
+            "TRF":    ["ellmax","INTDIM","INTTRF","NCTRF"],
+            "CNN":    ["ellmax","INTDIM","INTCNN"],
+            "ResMLP": ["INTDIM","NLAYER","TMAT"],
+        }
+        for key, msg in _required_lists:
+            if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
+                raise ValueError(msg)
+            if any(x is None for x in tmp[:imax]):
+                raise ValueError(msg)
+        for i in range(imax):
+            if not self.eval[i]:
+                continue
+            params = self.extra_args["extrapar"][i]
+            if not isinstance(params, dict):
+                raise ValueError('Emulator CMB: extrapar option not a dictionary') 
+        
+            mla = params.get('MLA')
+            if mla is None:
+                raise ValueError(f'Emulator CMB: Missing extrapar MLA option')
+            try:
+                req_keys = _mla_requirements[mla]
+            except KeyError:
+                raise KeyError(f"Emulator CMB: Unknown MLA option: {mla}")
+            miss = [k for k in req_keys if k not in params]
+            if miss:
+                raise KeyError(f"Emulator CMB: Missing extrapar keys for {mla}: {miss}")
+        # BASIC CHECKS ENDS ------------------------------------------------
+        for i in range(imax):
+            if not self.eval[i]:
+                continue
+            file = os.path.join(RT, self.extra_args['extra'][i])
+            self.info[i] = np.load(file, allow_pickle=True)
+            self.ord[i] = self.extra_args['ord'][i]
+            self.extrapar[i] = self.extra_args['extrapar'][i].copy()
+            if self.extrapar[i]['MLA'] == 'TRF':
+                self.M[i] = TRF(input_dim = len(self.ord[i]),
+                                output_dim = self.extrapar[i]['ellmax']-2,
+                                int_dim = self.extrapar[i]['INTDIM'],
+                                int_trf = self.extrapar[i]['INTTRF'],
+                                N_channels = self.extrapar[i]['NCTRF'])
+            elif self.extrapar[i]['MLA'] == 'CNN':
+                self.M[i] = CNNMLP(input_dim = len(self.ord[i]),
+                                   output_dim = self.extrapar[i]['ellmax']-2,
+                                   int_dim = self.extrapar[i]['INTDIM'],
+                                   cnn_dim = self.extrapar[i]['INTCNN'])
+            elif self.extrapar[i]['MLA'] == 'ResMLP':
+                file = os.path.join(RT, self.extrapar[i]["TMAT"])
+                self.tmat[i] = np.load(file, allow_pickle=True)
+                self.M[i] = ResMLP(input_dim = len(self.ord[i]), 
+                                   output_dim = len(self.tmat[i]), 
+                                   int_dim = self.extrapar[i]['INTDIM'], 
+                                   N_layer = self.extrapar[i]['NLAYER'])
+            self.M[i] = self.M[i].to(self.device)
+            self.M[i] = nn.DataParallel(self.M[i])
+            file = os.path.join(RT, self.extra_args["file"][i])
+            self.M[i].load_state_dict(torch.load(file, map_location=self.device))
+            self.M[i] = self.M[i].module.to(self.device)
+            self.M[i].eval()
+        
     def predict_cmb(self, model, X, einfo):
         X_mean = torch.Tensor(einfo.item()['X_mean']).to(self.device)
         X_std  = torch.Tensor(einfo.item()['X_std']).to(self.device)
