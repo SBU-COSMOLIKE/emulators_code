@@ -16,7 +16,7 @@ class emulcmb(Theory):
         super().initialize()
         RT = os.environ.get("ROOTDIR")
         self.lmax_theory = 9052
-        self.ell         = np.arange(0,self.lmax_theory,1)
+        self.ell = np.arange(0,self.lmax_theory,1)
         # TT, TE, EE, PHIPHI 
         imax = 4
         self.eval  = [False] * imax
@@ -47,15 +47,14 @@ class emulcmb(Theory):
         for key, msg in _required_lists:
             if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
                 raise ValueError(msg)        
-            if any(x is None or 
-                  (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
+            if any(self.eval[i] and (x is None or (isinstance(x,str) and x.strip().lower()=="none")) for x in tmp[:imax]):
                 raise ValueError(msg)
         for i in range(imax):
             if not self.eval[i]:
                 continue
             params = self.extra_args["extrapar"][i]
             if not isinstance(params, dict):
-                raise ValueError('Emulator CMB: extrapar option not a dictionary') 
+                raise ValueError('Emulator CMB: extrapar option not a dictionary')
             mla = params.get('MLA')
             if mla is None or (isinstance(mla, str) and mla.strip().lower() == "none"):
                 raise ValueError(f'Emulator CMB: Missing extrapar MLA option')

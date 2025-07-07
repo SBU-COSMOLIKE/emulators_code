@@ -23,21 +23,52 @@ class emultheta(Theory):
     def initialize(self):
         super().initialize()
         RT = os.environ.get("ROOTDIR")
-        self.M      = [None]
-        self.info   = [None]
-        self.ord    = [None]
+        imax = 1
+        for name in ("M", "info", "ord", "extrapar"):
+            setattr(self, name, [None] * imax )
         self.req    = [] 
         self.device = self.extra_args.get("device")
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
+        
+        # BASIC CHECKS BEGINS ------------------------------------------------
+        _required_lists = [
+            ("extra", "Emulator Theta: Missing emulator file (extra) option"),
+            ("ord", "Emulator Theta: Missing ord (parameter ordering) option"),
+            ("file", "Emulator Theta: Missing emulator file option"),
+            ("extrapar", "Emulator Theta: Missing extrapar option"),
+        ]
+        for key, msg in _required_lists:
+            if (tmp := self.extra_args.get(key)) is None:
+                raise ValueError(msg)        
+            if any(x is None or (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
+                raise ValueError(msg)
+        _mla_requirements = {
+            "GP":  [],
+            "ResMLP": ["INTDIM","NLAYER"],
+        }
+        params = self.extra_args["extrapar"][0]
+        if not isinstance(params, dict):
+            raise ValueError('Emulator Theta: extrapar option not a dictionary')
+        mla = params.get('MLA')
+        if mla is None or (isinstance(mla, str) and mla.strip().lower() == "none"):
+            raise ValueError(f'Emulator Theta: Missing extrapar MLA option')
+        try:
+            req_keys = _mla_requirements[mla]
+        except KeyError:
+            raise KeyError(f"Emulator Theta: Unknown MLA option: {mla}")
+        miss = [k for k in req_keys if k not in params]
+        if miss:
+            raise KeyError(f"Emulator Theta: Missing extrapar keys for {mla}: {miss}")
+        # BASIC CHECKS ENDS ------------------------------------------------
+        
         fname  = RT + "/" + self.extra_args.get("file")[0]
         fextra = RT + "/" + self.extra_args.get("extra")[0]
-        self.info[0] = np.load(fextra,allow_pickle=True)
         
+        self.info[0] = np.load(fextra,allow_pickle=True)
         self.ord[0]  = self.extra_args.get('ord')[0]
 
-        self.MLA = self.extra_args.get('extrapar')[0]['MLA']
+        self.MLA = self.extra_args['extrapar'][0]['MLA']
         if self.MLA == "GP":
             self.M[0]    = joblib.load(fname)
         elif self.MLA == "ResMLP":

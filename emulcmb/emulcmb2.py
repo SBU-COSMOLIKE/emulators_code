@@ -40,8 +40,7 @@ class emulcmb():
         for key, msg in _required_lists:
             if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
                 raise ValueError(msg)
-            if any(x is None or 
-                  (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
+            if any(x is None or (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
                 raise ValueError(msg)
         for i in range(imax):
             if not self.eval[i]:
