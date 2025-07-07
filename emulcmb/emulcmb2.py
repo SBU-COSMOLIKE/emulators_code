@@ -39,34 +39,35 @@ class emulcmb():
         }
         for key, msg in _required_lists:
             if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
-                raise ValueError(msg)
-            if any(x is None or (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
+                raise ValueError(msg)        
+            if any(self.eval[i] and (x is None or (isinstance(x,str) and x.strip().lower()=="none")) for x in tmp[:imax]):
                 raise ValueError(msg)
         for i in range(imax):
             if not self.eval[i]:
                 continue
-            params = self.extra_args["extrapar"][i]
-            if not isinstance(params, dict):
-                raise ValueError('Emulator CMB: extrapar option not a dictionary') 
-        
-            mla = params.get('MLA')
+            self.extrapar[i] = self.extra_args["extrapar"][i].copy()
+            if not isinstance(self.extrapar[i], dict):
+                raise ValueError('Emulator CMB: extrapar option not a dictionary')
+            mla = self.extrapar[i].get('MLA')
             if mla is None or (isinstance(mla, str) and mla.strip().lower() == "none"):
                 raise ValueError(f'Emulator CMB: Missing extrapar MLA option')
             try:
                 req_keys = _mla_requirements[mla]
             except KeyError:
                 raise KeyError(f"Emulator CMB: Unknown MLA option: {mla}")
-            miss = [k for k in req_keys if k not in params]
+            miss = [k for k in req_keys if k not in self.extrapar[i]]
             if miss:
                 raise KeyError(f"Emulator CMB: Missing extrapar keys for {mla}: {miss}")
         # BASIC CHECKS ENDS ------------------------------------------------
+        
         for i in range(imax):
             if not self.eval[i]:
                 continue
+            
             file = os.path.join(RT, self.extra_args['extra'][i])
             self.info[i] = np.load(file, allow_pickle=True)
             self.ord[i] = self.extra_args['ord'][i]
-            self.extrapar[i] = self.extra_args['extrapar'][i].copy()
+            
             if self.extrapar[i]['MLA'] == 'TRF':
                 self.M[i] = TRF(input_dim = len(self.ord[i]),
                                 output_dim = self.extrapar[i]['ellmax']-2,

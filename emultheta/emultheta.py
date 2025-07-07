@@ -25,7 +25,7 @@ class emultheta(Theory):
         RT = os.environ.get("ROOTDIR")
         imax = 1
         for name in ("M", "info", "ord", "extrapar"):
-            setattr(self, name, [None] * imax )
+            setattr(self, name, [None] * imax)
         self.req    = [] 
         self.device = self.extra_args.get("device")
         if self.device == "cuda":
@@ -47,37 +47,37 @@ class emultheta(Theory):
             "GP":  [],
             "ResMLP": ["INTDIM","NLAYER"],
         }
-        params = self.extra_args["extrapar"][0]
-        if not isinstance(params, dict):
+        self.extrapar = self.extra_args["extrapar"][0]
+        if not isinstance(self.extrapar, dict):
             raise ValueError('Emulator Theta: extrapar option not a dictionary')
-        mla = params.get('MLA')
-        if mla is None or (isinstance(mla, str) and mla.strip().lower() == "none"):
+        self.MLA = self.extrapar.get('MLA')
+        if self.MLA is None or (isinstance(self.MLA, str) and self.MLA.strip().lower() == "none"):
             raise ValueError(f'Emulator Theta: Missing extrapar MLA option')
         try:
-            req_keys = _mla_requirements[mla]
+            req_keys = _mla_requirements[self.MLA]
         except KeyError:
-            raise KeyError(f"Emulator Theta: Unknown MLA option: {mla}")
-        miss = [k for k in req_keys if k not in params]
+            raise KeyError(f"Emulator Theta: Unknown MLA option: {self.MLA}")
+        miss = [k for k in req_keys if k not in self.extrapar]
         if miss:
-            raise KeyError(f"Emulator Theta: Missing extrapar keys for {mla}: {miss}")
+            raise KeyError(f"Emulator Theta: Missing extrapar keys for {self.MLA}: {miss}")
         # BASIC CHECKS ENDS ------------------------------------------------
         
-        fname  = RT + "/" + self.extra_args.get("file")[0]
-        fextra = RT + "/" + self.extra_args.get("extra")[0]
+        file = os.path.join(RT, self.extra_args.get("extra")[0])
+        self.info[0] = np.load(file,allow_pickle=True)
+        self.ord[0] = self.extra_args.get('ord')[0]
         
-        self.info[0] = np.load(fextra,allow_pickle=True)
-        self.ord[0]  = self.extra_args.get('ord')[0]
-
-        self.MLA = self.extra_args['extrapar'][0]['MLA']
         if self.MLA == "GP":
-            self.M[0]    = joblib.load(fname)
+            file = os.path.join(RT, self.extra_args.get("file")[0])
+            self.M[0] = joblib.load(file)
         elif self.MLA == "ResMLP":
-            intdim = self.extra_args.get('extrapar')[0]['INTDIM']
-            Nlayer = self.extra_args.get('extrapar')[0]['NLAYER']
-            self.M[0] = ResMLP2(input_dim=len(self.ord[0]),output_dim=1,int_dim=intdim,N_layer=Nlayer)
+            self.M[0] = ResMLP2(input_dim = len(self.ord[0]),
+                                output_dim = 1,
+                                int_dim = self.extrapar['INTDIM'],
+                                N_layer = self.extrapar['NLAYER'])
             self.M[0] = self.M[0].to(self.device)
             self.M[0] = nn.DataParallel(self.M[0])
-            self.M[0].load_state_dict(torch.load(fname, map_location=self.device))
+            file = os.path.join(RT, self.extra_args.get("file")[0])
+            self.M[0].load_state_dict(torch.load(file, map_location=self.device))
             self.M[0] = self.M[0].module.to(self.device)
             self.M[0].eval()
         self.req.extend(self.ord[0])

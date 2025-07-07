@@ -7,28 +7,60 @@ class emultheta():
     def __init__(self, extra_args):
         self.extra_args = extra_args
         RT = os.environ.get("ROOTDIR")
-        self.M      = [None]
-        self.info   = [None]
-        self.ord    = [None]
+        imax = 1
+        for name in ("M", "info", "ord", "extrapar"):
+            setattr(self, name, [None] * imax)
         self.device = self.extra_args.get("device")
         if self.device == "cuda":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        # BASIC CHECKS BEGINS ------------------------------------------------
+        _required_lists = [
+            ("extra", "Emulator Theta: Missing emulator file (extra) option"),
+            ("ord", "Emulator Theta: Missing ord (parameter ordering) option"),
+            ("file", "Emulator Theta: Missing emulator file option"),
+            ("extrapar", "Emulator Theta: Missing extrapar option"),
+        ]
+        for key, msg in _required_lists:
+            if (tmp := self.extra_args.get(key)) is None:
+                raise ValueError(msg)        
+            if any(x is None or (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
+                raise ValueError(msg)
+        _mla_requirements = {
+            "GP":  [],
+            "ResMLP": ["INTDIM","NLAYER"],
+        }
+        self.extrapar = self.extra_args["extrapar"][0]
+        if not isinstance(self.extrapar, dict):
+            raise ValueError('Emulator Theta: extrapar option not a dictionary')
+        self.MLA = self.extrapar.get('MLA')
+        if self.MLA is None or (isinstance(self.MLA, str) and self.MLA.strip().lower() == "none"):
+            raise ValueError(f'Emulator Theta: Missing extrapar MLA option')
+        try:
+            req_keys = _mla_requirements[self.MLA]
+        except KeyError:
+            raise KeyError(f"Emulator Theta: Unknown MLA option: {self.MLA}")
+        miss = [k for k in req_keys if k not in self.extrapar]
+        if miss:
+            raise KeyError(f"Emulator Theta: Missing extrapar keys for {self.MLA}: {miss}")
+        # BASIC CHECKS ENDS ------------------------------------------------
 
-        fname  = RT + "/" + self.extra_args.get("file")[0]
-        fextra = RT + "/" + self.extra_args.get("extra")[0]
-        self.info[0] = np.load(fextra,allow_pickle=True)
-        self.MLA = self.extra_args.get('extrapar')[0]['MLA']
+        file = os.path.join(RT, self.extra_args.get("extra")[0])
+        self.info[0] = np.load(file,allow_pickle=True)
         self.ord[0]  = self.extra_args.get('ord')[0]
+        
         if self.MLA == "GP":
-            self.M[0]    = joblib.load(fname)
+            file = os.path.join(RT, self.extra_args.get("file")[0])
+            self.M[0] = joblib.load(file)
         elif self.MLA == "ResMLP":
-            intdim = self.extra_args.get('extrapar')[0]['INTDIM']
-            Nlayer = self.extra_args.get('extrapar')[0]['NLAYER']
-            self.M[0] = ResMLP2(input_dim=len(self.ord[0]),output_dim=1,int_dim=intdim,N_layer=Nlayer)
+            self.M[0] = ResMLP2(input_dim = len(self.ord[0]),
+                                output_dim = 1,
+                                int_dim = self.extrapar['INTDIM'],
+                                N_layer = self.extrapar['NLAYER'])
             self.M[0] = self.M[0].to(self.device)
             self.M[0] = nn.DataParallel(self.M[0])
-            self.M[0].load_state_dict(torch.load(fname, map_location=self.device))
+            file = os.path.join(RT, self.extra_args.get("file")[0])
+            self.M[0].load_state_dict(torch.load(file, map_location=self.device))
             self.M[0] = self.M[0].module.to(self.device)
             self.M[0].eval()
 
