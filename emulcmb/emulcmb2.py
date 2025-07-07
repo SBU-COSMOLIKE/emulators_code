@@ -40,7 +40,8 @@ class emulcmb():
         for key, msg in _required_lists:
             if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
                 raise ValueError(msg)
-            if any(x is None for x in tmp[:imax]):
+            if any(x is None or 
+                  (isinstance(x, str) and x.strip().lower() == "none") for x in tmp[:imax]):
                 raise ValueError(msg)
         for i in range(imax):
             if not self.eval[i]:
@@ -50,7 +51,7 @@ class emulcmb():
                 raise ValueError('Emulator CMB: extrapar option not a dictionary') 
         
             mla = params.get('MLA')
-            if mla is None:
+            if mla is None or (isinstance(mla, str) and mla.strip().lower() == "none"):
                 raise ValueError(f'Emulator CMB: Missing extrapar MLA option')
             try:
                 req_keys = _mla_requirements[mla]
