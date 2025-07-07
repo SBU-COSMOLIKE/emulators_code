@@ -126,10 +126,7 @@ class emulcmb(Theory):
     
         cls_dict = {k : np.zeros(self.lmax_theory) for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]}
         cls_dict["ell"] = self.ell
-        
-        cls_dict["pp"] = cls_old["pp"] if "pp" in cls_old else np.zeros(self.lmax_theory)
         ls = self.ell
-        np.save('clphiphi.npy',cls_dict["pp"][2:2601])
         if ell_factor:
             for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]:
                 ls_fac = self.ell_factor(ls,k)
