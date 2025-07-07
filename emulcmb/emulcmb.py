@@ -116,10 +116,15 @@ class emulcmb(Theory):
             state[cmb[i]][2:lmax] = self.predict_cmb(self.M[i], p, self.info[i])*norm
         state["et"] = state["te"]
         if self.extra_args.get('eval')[3]:
+<<<<<<< HEAD
             phiphi = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
             ell_p = np.arange(2,len(phiphi)+2,1)
             pp_to_kk_factor = (ell_p*(ell_p+1))**2/(2*np.pi)
             state["pp"][2:len(phiphi)+2] = phiphi/pp_to_kk_factor
+=======
+            state["pp"][2:len(phiphi)+2] = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
+        # cl calculation ends ---------------------------
+>>>>>>> 08781fc (update phiphi)
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
@@ -130,18 +135,18 @@ class emulcmb(Theory):
         
         cls_dict["pp"] = cls_old["pp"] if "pp" in cls_old else np.zeros(self.lmax_theory)
         ls = self.ell
-        
+        np.save('clphiphi.npy',cls_dict["pp"][2:2601])
         if ell_factor:
-            for k in [ "tt", "te", "ee" , "et" , "bb"]:
+            for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]:
                 ls_fac = self.ell_factor(ls,k)
                 cls_dict[k] = cls_old[k] * ls_fac
         else:
-            for k in [ "tt", "te", "ee" , "et" , "bb"]:
+            for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]:
                 cls_dict[k] = cls_old[k]
         if unit_included:
             unit=1
         else:
-            for k in [ "tt", "te", "ee" , "et" , "bb" ]:
+            for k in [ "tt", "te", "ee" , "et" , "bb", "pp" ]:
                 unit = self.cmb_unit_factor(k, units, Tcmb)
                 cls_dict[k] = cls_dict[k] * unit
         return cls_dict
