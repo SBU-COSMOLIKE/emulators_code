@@ -25,8 +25,8 @@ class emulrdrag():
         # BASIC CHECKS ENDS ------------------------------------------------
         
         self.info[0] = np.load(path.join(RT,self.extra_args.get("extra")[0]),allow_pickle=True)        
-        self.M[0] = joblib.load(path.join(RT,self.extra_args.get("file")[0]))
-        self.ord[0] = self.extra_args.get('ord')[0]
+        self.M[0]    = joblib.load(path.join(RT,self.extra_args.get("file")[0]))
+        self.ord[0]  = self.extra_args.get('ord')[0]
 
     def calculate(self, par):
         state = {}

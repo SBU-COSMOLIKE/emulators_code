@@ -168,7 +168,10 @@ class emulbaosn(Theory):
     def get_angular_diameter_distance(self, z):
         d_l = self.current_state["dl"].copy()
         d_a = d_l/(1.0 + self.z[0])**2
-        D_A_interpolate = interpolate.interp1d(self.z[0], d_a)
+        D_A_interpolate = interpolate.interp1d(self.z[0], d_a,
+                                               kind='cubic',
+                                               assume_sorted=True,
+                                               fill_value="extrapolate")
         D_A = D_A_interpolate(z)
         try:
             l = len(D_A)

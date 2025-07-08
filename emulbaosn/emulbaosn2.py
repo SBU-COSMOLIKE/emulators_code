@@ -2,13 +2,14 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
+import os.path as path
 from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
 from scipy import interpolate
 
 class emulbaosn():    
     def __init__(self, extra_args):
         self.extra_args = extra_args
-RT = os.environ.get("ROOTDIR")
+        RT = os.environ.get("ROOTDIR")
         self.imax = 2
         for name in ("M", "info", "ord", "z", "tmat", "extrapar", "offset"):
             setattr(self, name, [None] * self.imax)
@@ -130,12 +131,20 @@ RT = os.environ.get("ROOTDIR")
     def calculate(self, par):       
         state = {}
         out = ["dl","H"]
-        # H(z) ------------------------------------------------------------
+        # z --------------------------------------------------------------------
+        state['z'] = self.z[0]
+        # H(z) -----------------------------------------------------------------
         i = 1
         params = self.extra_args.get('ord')[i]
         p = np.array([par[key] for key in params])
-        state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
-        # SN ------------------------------------------------------------
+        tmp = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
+
+        # forcing H(z) and dL(z) to be defined on the same z-grid
+        state[out[i]] = interpolate.interp1d(self.z[1], tmp, 
+                                             kind='cubic',
+                                             assume_sorted=True,
+                                             fill_value="extrapolate")(self.z[0])
+        # SN -------------------------------------------------------------------
         i = 0
         func  = interpolate.interp1d(self.z[1], 2.99792458e5/state["H"],
                                      kind='cubic',
@@ -147,42 +156,4 @@ RT = os.environ.get("ROOTDIR")
                                              kind='cubic',
                                              assume_sorted=True,
                                              fill_value="extrapolate")(self.z[0])
-
-    def get_angular_diameter_distance(self, z):
-        d_l = self.current_state["dl"].copy()
-        d_a = d_l/(1.0 + self.z[0])**2
-        D_A_interpolate = interpolate.interp1d(self.z[0], d_a)
-        D_A = D_A_interpolate(z)
-        try:
-            l = len(D_A)
-        except:
-            D_A = np.array([D_A])
-        else:
-            l = 1
-        return D_A
-
-    def get_angular_diameter_distance_2(self, zpair):
-        z_1, z_2 = zpair[0]
-        
-        if z_1 >= z_2:
-            return 0
-        else:
-            da1 = self.get_angular_diameter_distance(z_1)
-            da2 = self.get_angular_diameter_distance(z_2)
-            cd1 = da1*(1+z_1)
-            cd2 = da2*(1+z_2)
-            return (cd2-cd1)/(1+z_2)
-
-    def get_Hubble(self, z, units = "km/s/Mpc"):
-        H = self.current_state["H"].copy()
-        H_interpolate = interpolate.interp1d(self.z[1], H)
-        H_arr = H_interpolate(z)
-        try:
-            l = len(H_arr)
-        except:
-            H_arr = np.array([H_arr])
-        else:
-            l = 1
-        if units == "1/Mpc":
-            H_arr /= 2.99792458e5
-        return H_arr
+        return state
