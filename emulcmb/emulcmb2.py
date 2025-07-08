@@ -1,4 +1,5 @@
 import torch, os
+import os.path as path
 import torch.nn as nn
 import numpy as np
 from cobaya.theories.emulcmb.emulator import ResBlock, ResMLP, TRF, CNNMLP
@@ -16,9 +17,7 @@ class emulcmb():
         self.eval = [False, False, False, False]
         for name in ("M", "info", "ord", "tmat", "extrapar"):
             setattr(self, name, [None] * 4)
-        self.device = self.extra_args.get("device")
-        if self.device == "cuda":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
 
         if (teval := self.extra_args.get('eval')) is not None:
             for i in range(imax):
@@ -40,7 +39,9 @@ class emulcmb():
         for key, msg in _required_lists:
             if (tmp := self.extra_args.get(key)) is None or (len(tmp)<imax):
                 raise ValueError(msg)        
-            if any(self.eval[i] and (x is None or (isinstance(x,str) and x.strip().lower()=="none")) for x in tmp[:imax]):
+            if any(self.eval[i] and 
+                   (tmp[i] is None or (isinstance(tmp[i], str) and tmp[i].strip().lower()=="none")) 
+                   for i in range(imax)):
                 raise ValueError(msg)
         for i in range(imax):
             if not self.eval[i]:
@@ -63,9 +64,8 @@ class emulcmb():
         for i in range(imax):
             if not self.eval[i]:
                 continue
-            
-            file = os.path.join(RT, self.extra_args['extra'][i])
-            self.info[i] = np.load(file, allow_pickle=True)
+
+            self.info[i] = np.load(path.join(RT, self.extra_args['extra'][i]), allow_pickle=True)
             self.ord[i] = self.extra_args['ord'][i]
             
             if self.extrapar[i]['MLA'] == 'TRF':
@@ -80,16 +80,14 @@ class emulcmb():
                                    int_dim = self.extrapar[i]['INTDIM'],
                                    cnn_dim = self.extrapar[i]['INTCNN'])
             elif self.extrapar[i]['MLA'] == 'ResMLP':
-                file = os.path.join(RT, self.extrapar[i]["TMAT"])
-                self.tmat[i] = np.load(file, allow_pickle=True)
+                self.tmat[i] = np.load(path.join(RT,self.extrapar[i]["TMAT"]), allow_pickle=True)
                 self.M[i] = ResMLP(input_dim = len(self.ord[i]), 
                                    output_dim = len(self.tmat[i]), 
                                    int_dim = self.extrapar[i]['INTDIM'], 
                                    N_layer = self.extrapar[i]['NLAYER'])
             self.M[i] = self.M[i].to(self.device)
             self.M[i] = nn.DataParallel(self.M[i])
-            file = os.path.join(RT, self.extra_args["file"][i])
-            self.M[i].load_state_dict(torch.load(file, map_location=self.device))
+            self.M[i].load_state_dict(torch.load(path.join(RT, self.extra_args["file"][i]),map_location=self.device))
             self.M[i] = self.M[i].module.to(self.device)
             self.M[i].eval()
         
@@ -141,7 +139,6 @@ class emulcmb():
         state["et"] = state["te"]
         if self.extra_args.get('eval')[3]:
             state["pp"][2:len(phiphi)+2] = self.predict_phi(self.M[3], p, self.info[3], self.tmat[3])[0]
-
         return state
 
     def get_Cl(self, params, ell_factor=False, units="1", unit_included=True, Tcmb=2.7255):

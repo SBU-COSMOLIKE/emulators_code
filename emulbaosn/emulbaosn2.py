@@ -18,8 +18,13 @@ class emulbaosn():
         self.device = self.extra_args.get("device")
         self.zstep = np.arange(0,3,0.0048)
         self.dz = (self.zstep[1] - self.zstep[0])  # assuming uniform spacing
-        if self.device == "cuda":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
+
+        if (teval := self.extra_args.get('eval')) is not None:
+            for i in range(imax):
+                self.eval[i] = (i<len(teval)) and bool(teval[i])
+        self.eval = np.array(self.eval, dtype=bool)
 
         # H(z) ------------------------------------------------------------
         i = 1
