@@ -22,11 +22,8 @@ class emulbaosn(Theory):
             setattr(self, name, [None] * self.imax)
         self.req = [] 
         self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
-        
-        self.zstep = np.arange(0,3,0.0048)
-        self.dz = (self.zstep[1] - self.zstep[0])  # assuming uniform spacing
                 
-        # BASIC CHECKS BEGINS ------------------------------------------------
+        # BASIC CHECKS BEGINS --------------------------------------------------
         _required_lists = [
             ("extra", "Emulator BAOSN: Missing emulator file (extra) option"),
             ("ord", "Emulator BAOSN: Missing ord (parameter ordering) option"),
@@ -58,7 +55,7 @@ class emulbaosn(Theory):
             miss = [k for k in req_keys if k not in self.extrapar[i]]
             if miss:
                 raise KeyError(f"Emulator BAOSN: Missing extrapar keys for {mla}: {miss}")
-        # BASIC CHECKS ENDS --------------------------------------------------
+        # BASIC CHECKS ENDS ----------------------------------------------------
 
         # H(Z) -----------------------------------------------------------------
         i = 1
@@ -80,7 +77,6 @@ class emulbaosn(Theory):
         self.M[i] = self.M[i].module.to(self.device)
         self.M[i].eval()
         self.req.extend(self.ord[i])
-        
         # SN(Z) ----------------------------------------------------------------
         i = 0
         if self.extrapar[i]['MLA'].strip().lower() == 'int':
@@ -92,7 +88,6 @@ class emulbaosn(Theory):
             self.z[i] = np.linspace(zmin, zmax, NZ)
             self.ord[i] = self.extra_args.get('ord')[1] # Same as H(z)
             self.req.extend(self.ord[i]) 
-
         # required parameters --------------------------------------------------
         self.req = list(set(self.req))
         d = {'rdrag': None}
@@ -121,24 +116,37 @@ class emulbaosn(Theory):
             y_pred = np.exp(y_pred) - offset
         return y_pred[0]
 
-    def HtoDl(self, H):
-        c = 2.99792458e5
-        func = interpolate.interp1d(self.z[1],c/H,fill_value="extrapolate")
-        integrand = func(self.zstep)
-        dl = np.zeros_like(integrand)
-        f0 = integrand[0:-2:2]
-        f1 = integrand[1:-1:2]
-        f2 = integrand[2::2]
-        simpson_chunks = self.dz / 3 * (f0 + 4 * f1 + f2)
-        dl[2::2] = np.cumsum(simpson_chunks)
-        dl[1::2] = (dl[0:-2:2] + dl[2::2]) / 2
-        dl*=(1+self.zstep)
-        return interpolate.interp1d(self.zstep,dl,fill_value="extrapolate")
+    def cumulative_simpson(self, z, y):
+        """
+        Compute the cumulative integral of y(z) over z using composite Simpson’s rule
+        on a uniform grid. Returns an array C of the same length as z, where
+        C[k] = ∫_z[0]^z[k] y(z') dz'.
+        """
+        n = len(z)
+        if n < 3 or (n - 1) % 2 != 0:
+            raise ValueError("Need an odd number of points (even number of intervals).")
+        dz = z[1] - z[0]
+        
+        # Simpson contributions on each pair of intervals [z[2m], z[2m+2]]
+        # there are (n-1)/2 such chunks
+        f0 = y[:-2:2]    # y[0], y[2], y[4], …
+        f1 = y[1:-1:2]   # y[1], y[3], y[5], …
+        f2 = y[2::2]     # y[2], y[4], y[6], …
+        chunks = dz/3 * (f0 + 4*f1 + f2)
+        
+        # cumulative sum of the full‐chunk integrals at even indices
+        cum_even = np.concatenate(([0.0], np.cumsum(chunks)))
+        
+        # build the full cumulative array
+        C = np.empty_like(y)
+        C[0] = 0.0
+        C[2::2] = cum_even[1:]               # at z[2], z[4], …
+        C[1::2] = (cum_even[:-1] + cum_even[1:]) / 2
+        return C
    
     def calculate(self, state, want_derived=True, **params):       
         par = params.copy()
         out = ["dl","H"]
-        
         # H(z) ------------------------------------------------------------
         i = 1
         params = self.extra_args.get('ord')[i]
@@ -146,7 +154,16 @@ class emulbaosn(Theory):
         state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
         # SN ------------------------------------------------------------
         i = 0
-        state[out[i]] = self.HtoDl(state["H"])(self.z[0])
+        func  = interpolate.interp1d(self.z[1], 2.99792458e5/state["H"],
+                                     kind='cubic',
+                                     assume_sorted=True,
+                                     fill_value="extrapolate")
+        zstep = np.linspace(0.0, self.z[0][-1], 2*len(self.z[0])+1)
+        dl    = self.cumulative_simpson(zstep, func(zstep))*(1 + zstep)
+        state[out[i]] = interpolate.interp1d(zstep, dl, 
+                                             kind='cubic',
+                                             assume_sorted=True,
+                                             fill_value="extrapolate")(self.z[0])
 
     def get_angular_diameter_distance(self, z):
         d_l = self.current_state["dl"].copy()
