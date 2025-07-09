@@ -2,7 +2,7 @@ import numpy as np
 import os, joblib
 import torch
 import torch.nn as nn
-from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP, ResMLP2
+from cobaya.theories.emultheta.emulator import ResMLP2
 class emultheta():    
     def __init__(self, extra_args):
         self.extra_args = extra_args

@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
-
 
 class Supact(nn.Module):
     # New activation function, returns:
@@ -36,9 +34,9 @@ class Affine(nn.Module):
 
         return x * self.gain + self.bias
 
-class Better_Attention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, in_size ,n_partitions):
-        super(Better_Attention, self).__init__()
+        super(Attention, self).__init__()
 
         self.embed_dim    = in_size//n_partitions
         self.WQ           = nn.Linear(self.embed_dim,self.embed_dim)
@@ -68,9 +66,9 @@ class Better_Attention(nn.Module):
 
         return out
 
-class Better_Transformer(nn.Module):
+class Transformer(nn.Module):
     def __init__(self, in_size, n_partitions):
-        super(Better_Transformer, self).__init__()  
+        super(Transformer, self).__init__()  
     
         # get/set up hyperparams
         self.int_dim      = in_size//n_partitions 
@@ -188,8 +186,8 @@ class TRF(nn.Module):
         modules.append(Supact(int_dim))
         modules.append(nn.Linear(int_dim, int_dim_trf))
         modules.append(Supact(int_dim_trf))
-        modules.append(Better_Attention(int_dim_trf, n_channels))
-        modules.append(Better_Transformer(int_dim_trf, n_channels))
+        modules.append(Attention(int_dim_trf, n_channels))
+        modules.append(Transformer(int_dim_trf, n_channels))
         modules.append(nn.Linear(int_dim_trf, output_dim))
         modules.append(Affine())
 
@@ -258,39 +256,3 @@ class CNNMLP(nn.Module):
         out = self.norm(out)
         return out
 
-class ResMLP2(nn.Module):
-
-    def __init__(self, input_dim, output_dim, int_dim, N_layer):
-
-        super(ResMLP2, self).__init__()
-
-        modules=[]
-
-        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
-        int_dim = int_dim
-
-        # Def: we will only change the dimension of the datavector using linear transformations  
-        modules.append(nn.Linear(input_dim, int_dim))
-        
-        # Def: by design, a pure block has the input and output dimension to be the same
-        for n in range(N_layer):
-            # Def: This is what we defined as a pure MLP block
-            # Why the Affine function?
-            #   R: this is for the Neuro-network to learn how to normalize the data between layer
-            modules.append(ResBlock(int_dim, int_dim))
-            modules.append(Supact(int_dim))
-        
-        # Def: the transformation from the internal dimension to the output dimension of the
-        #      data vector we intend to emulate
-        
-        modules.append(nn.Linear(int_dim, output_dim))
-        modules.append(Affine())
-        # NN.SEQUENTIAL is a PYTHORCH function DEFINED AT: https://pytorch.org/docs/stable/generated/torch.nn.Sequential.html
-        # This function stacks up layers in the modules-list in sequence to create the whole model
-        self.simpmlp =nn.Sequential(*modules)#
-
-    def forward(self, x):
-        #x is a cosmological parameter set you feed in the model
-        out = self.simpmlp(x)
-
-        return out

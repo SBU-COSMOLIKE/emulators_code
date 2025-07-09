@@ -35,7 +35,6 @@ class Affine(nn.Module):
 
         return x * self.gain + self.bias
 
-
 class ResBlock(nn.Module):
     def __init__(self, in_size, out_size):
         super(ResBlock, self).__init__()
@@ -63,16 +62,16 @@ class ResBlock(nn.Module):
         return o2
 
 
-class ResMLP(nn.Module):
+class ResMLP2(nn.Module):
 
     def __init__(self, input_dim, output_dim, int_dim, N_layer):
 
-        super(ResMLP, self).__init__()
+        super(ResMLP2, self).__init__()
 
         modules=[]
 
         # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
-        int_dim = int_dim * 128
+        int_dim = int_dim
 
         # Def: we will only change the dimension of the datavector using linear transformations  
         modules.append(nn.Linear(input_dim, int_dim))
@@ -92,12 +91,10 @@ class ResMLP(nn.Module):
         modules.append(Affine())
         # NN.SEQUENTIAL is a PYTHORCH function DEFINED AT: https://pytorch.org/docs/stable/generated/torch.nn.Sequential.html
         # This function stacks up layers in the modules-list in sequence to create the whole model
-        self.resmlp =nn.Sequential(*modules)#
+        self.simpmlp =nn.Sequential(*modules)#
 
     def forward(self, x):
         #x is a cosmological parameter set you feed in the model
-        out = self.resmlp(x)
+        out = self.simpmlp(x)
 
         return out
-
-

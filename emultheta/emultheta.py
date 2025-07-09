@@ -2,10 +2,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theory import Theory
 from cobaya.typing import InfoDict
-from cobaya.theories.emulcmb.emulator import Supact, Affine, Better_Attention, Better_Transformer, ResBlock, ResMLP, TRF, CNNMLP, ResMLP2
+from cobaya.theories.emultheta.emulator import ResMLP2
 import joblib
 import scipy
 from scipy import interpolate
