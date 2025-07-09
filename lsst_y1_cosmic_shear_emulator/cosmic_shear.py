@@ -10,8 +10,7 @@ import h5py as h5
 sys.path.append(os.path.dirname(__file__))
 from cocoa_emu import nn_emulator
 
-
-class lsst_y1_cosmic_shear_emulator(Theory):
+class cosmic_shear(Theory):
     extra_args: InfoDict = { }
 
     def initialize(self):
