@@ -124,7 +124,6 @@ class ResBlock(nn.Module):
 
         return o2
 
-
 class ResMLP(nn.Module):
 
     def __init__(self, input_dim, output_dim, int_dim, N_layer):
@@ -143,7 +142,7 @@ class ResMLP(nn.Module):
         for n in range(N_layer):
             # Def: This is what we defined as a pure MLP block
             # Why the Affine function?
-            #   R: this is for the Neuro-network to learn how to normalize the data between layer
+            # R: this is for the Neuro-network to learn how to normalize the data between layer
             modules.append(ResBlock(int_dim, int_dim))
             modules.append(Supact(int_dim))
         
@@ -162,10 +161,7 @@ class ResMLP(nn.Module):
 
         return out
 
-
-
 class TRF(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim, int_trf, N_channels):
 
         super(TRF, self).__init__()
@@ -195,7 +191,6 @@ class TRF(nn.Module):
 
         self.trf =nn.Sequential(*modules)#
         
-
     def forward(self, x):
 
         out = self.trf(x)
@@ -204,9 +199,7 @@ class TRF(nn.Module):
 
 
 class CNNMLP(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim,cnn_dim):
-
         super(CNNMLP, self).__init__()
 
         modules = []
@@ -259,7 +252,6 @@ class CNNMLP(nn.Module):
         return out
 
 class ResMLP2(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim, N_layer):
 
         super(ResMLP2, self).__init__()

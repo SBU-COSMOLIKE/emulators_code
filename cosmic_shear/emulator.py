@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import MultivariateNormal
 import numpy as np
-import os
-import sys
+import os, sys
 from datetime import datetime
 import h5py as h5
 
