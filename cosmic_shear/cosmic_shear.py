@@ -8,22 +8,82 @@ from cobaya.typing import InfoDict
 import h5py as h5
 
 sys.path.append(os.path.dirname(__file__))
-from cocoa_emu import nn_emulator
+from emulator import ResTRF
 
 class cosmic_shear(Theory):
     extra_args: InfoDict = { }
+    path: str
 
     def initialize(self):
         super().initialize()
 
-        PATH = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('filename')
+        #PATH = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('filename')
+        RT = os.environ.get("ROOTDIR")
 
-        self.model = nn_emulator.nn_emulator(preset='xi_restrf')
-        self.model.load(PATH)
+        # read the block from the YAML
+        self.device      = self.extra_args.get('device')
+        self.file        = self.extra_args.get('file')[0]
+        self.extra       = self.extra_args.get('extra')[0]
+        self.ord         = self.extra_args.get('ord')[0]
+        self.fast_params = self.extra_args.get('fast_params')[0]
+        self.extrapar    = self.extra_args.get('extrapar')[0]
 
-        self.shear_calib_mask = np.load(os.environ.get("ROOTDIR") + '/external_modules/data/lsst_y1_cosmic_shear_emulator/shear_calib_mask.npy')[:,:780] 
+        self.M = []
+
+        # construct the requirements
+        req_params = np.concatenate((self.ord,self.fast_params))
+
+        self.req = {}
+
+        for p in req_params:
+            self.req[p] = None
+
+        # set the model to load the device, check if cuda is really available and set tensor type
+        if self.device == "cuda":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        torch.set_default_device(self.device)
+
+        # construct the network and load the weights
+        self.model = ResTRF(
+                        input_dim = len(self.ord),
+                        output_dim = self.extrapar['OUTPUT_DIM'],
+                        int_dim_res = self.extrapar['INT_DIM_RES'],
+                        int_dim_trf = self.extrapar['INT_DIM_TRF'],
+                        N_channels = self.extrapar['NC_TRF']
+        )
+        self.model.to(self.device)
+        state_dict = torch.load(self.file, map_location=self.device)
+        self.model.load_state_dict(state_dict)
+        self.model.eval()
+        self.M.append(self.model)
+
+        # load extra stuff for
+        if 'h5' in self.extra:
+            with h5.File(self.extra, 'r') as f:
+                self.samples_mean  = torch.Tensor(f['sample_mean'][:]).to(self.device)
+                self.samples_std   = torch.Tensor(f['sample_std'][:]).to(self.device)
+                self.dv_fid        = torch.Tensor(f['dv_fid'][:]).to(self.device)
+                self.dv_evals      = torch.Tensor(f['dv_evals'][:]).to(self.device)
+                self.dv_evecs      = torch.Tensor(f['dv_evecs'][:]).to(self.device)
+                # right here I would like to have a "trained_params" 
+                # so that we can check that ordering is correct!
+                # we can save users from a simple mistake this way
+
+        elif '.npy' in extra:
+            # stuff, idk how its structured
+            pass
+
+        # invert the rotation matrix so that we don't do it every time we evaluate
+        self.inv_dv_evecs = torch.linalg.inv(self.dv_evecs)
+
+        # for fast parameters
+        self.shear_calib_mask = np.load(RT + '/external_modules/data/cosmic_shear/shear_calib_mask.npy')[:,:780] 
 
     def add_shear_calib(self, m, datavector):
+        # this is to get a working datavector calculation in the emulator.
+        # we need to figure out how to apply shear calibration without the mask
+        # or how to generate a mask.
+
         for i in range(5):
             factor = (1 + m[i])**self.shear_calib_mask[i]
             factor = factor[0:780]
@@ -32,41 +92,19 @@ class cosmic_shear(Theory):
 
     def get_requirements(self):
         # remove shear calibration here and add to likelihood to make for cobaya speed hierarchy?
-        return {
-          "logA": None,
-          "H0": None,
-          "ns": None,
-          "omegabh2": None,
-          "omegach2": None,
-          "LSST_DZ_S1": None,
-          "LSST_DZ_S2": None,
-          "LSST_DZ_S3": None,
-          "LSST_DZ_S4": None,
-          "LSST_DZ_S5": None,
-          "LSST_A1_1": None,
-          "LSST_A1_2": None,
-          "LSST_M1": None,
-          "LSST_M2": None,
-          "LSST_M3": None,
-          "LSST_M4": None,
-          "LSST_M5": None
-        }
+        return self.req
 
     def calculate(self, state, want_derived = True, **params):
-        xi_params = [
-            params['logA'],params['ns'],params['H0'],params['omegabh2'],params['omegach2'],
-            params['LSST_DZ_S1'],params['LSST_DZ_S2'],params['LSST_DZ_S3'],params['LSST_DZ_S4'],params['LSST_DZ_S5'],
-            params['LSST_A1_1'],params['LSST_A1_2'] 
-        ]
+        X = [params[p] for p in self.ord]
+        M = [params[p] for p in self.fast_params]
 
-        shear_calibration_params = [
-            params['LSST_M1'],params['LSST_M2'],params['LSST_M3'],params['LSST_M4'],params['LSST_M5']
-        ]
+        with torch.no_grad():
+            y_pred = self.M[0]((torch.Tensor(X).to(self.device) - self.samples_mean) / self.samples_std)
 
-        xi_pm = self.model.predict(xi_params)[0]
-        xi_pm = self.add_shear_calib(shear_calibration_params, xi_pm)
+        y_pred = (y_pred * self.dv_evals) @ self.inv_dv_evecs + self.dv_fid
 
-        state["lsst_y1_xi"] = xi_pm
+        state["lsst_y1_xi"] = self.add_shear_calib(M,y_pred[0].cpu().detach().numpy())
+        np.savetxt('/home/grads/extra_data/evan/cocoa/Cocoa/state.txt',state["lsst_y1_xi"])
 
         return True
 
