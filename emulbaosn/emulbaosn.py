@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import os.path as path
 from cobaya.theory import Theory
-from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP, TRF
+from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP
 from scipy import interpolate
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
@@ -117,11 +117,7 @@ class emulbaosn(Theory):
         return y_pred[0]
 
     def cumulative_simpson(self, z, y):
-        """
-        Compute the cumulative integral of y(z) over z using composite Simpsonâ€™s rule
-        on a uniform grid. Returns an array C of the same length as z, where
-        C[k] = âˆ«_z[0]^z[k] y(z') dz'.
-        """
+        
         n = len(z)
         if n < 3 or (n - 1) % 2 != 0:
             raise ValueError("Need an odd number of points (even number of intervals).")
@@ -129,19 +125,20 @@ class emulbaosn(Theory):
         
         # Simpson contributions on each pair of intervals [z[2m], z[2m+2]]
         # there are (n-1)/2 such chunks
-        f0 = y[:-2:2]    # y[0], y[2], y[4], â€¦
-        f1 = y[1:-1:2]   # y[1], y[3], y[5], â€¦
-        f2 = y[2::2]     # y[2], y[4], y[6], â€¦
+        f0 = y[:-2:2]    # y[0], y[2], y[4], …
+        f1 = y[1:-1:2]   # y[1], y[3], y[5], …
+        f2 = y[2::2]     # y[2], y[4], y[6], …
         chunks = dz/3 * (f0 + 4*f1 + f2)
         
-        # cumulative sum of the fullâ€chunk integrals at even indices
+        # cumulative sum of the full-chunk integrals at even indices
         cum_even = np.concatenate(([0.0], np.cumsum(chunks)))
         
         # build the full cumulative array
         C = np.empty_like(y)
         C[0] = 0.0
-        C[2::2] = cum_even[1:]               # at z[2], z[4], â€¦
-        C[1::2] = (cum_even[:-1] + cum_even[1:]) / 2
+        C[2::2] = cum_even[1:]               # at z[2], z[4], …
+        for i in range(1, n, 2):
+            C[i] = C[i - 1] + dz / 6 * (y[i - 1] + 4 * y[i] + y[i + 1])
         return C
    
     def calculate(self, state, want_derived=True, **params):       
@@ -164,14 +161,13 @@ class emulbaosn(Theory):
                                              kind='cubic',
                                              assume_sorted=True,
                                              fill_value="extrapolate")(self.z[0])
+        
 
     def get_angular_diameter_distance(self, z):
         d_l = self.current_state["dl"].copy()
         d_a = d_l/(1.0 + self.z[0])**2
-        D_A_interpolate = interpolate.interp1d(self.z[0], d_a,
-                                               kind='cubic',
-                                               assume_sorted=True,
-                                               fill_value="extrapolate")
+        D_A_interpolate = interpolate.interp1d(self.z[0], d_a,kind='cubic',
+                                             assume_sorted=True,fill_value="extrapolate")
         D_A = D_A_interpolate(z)
         try:
             l = len(D_A)

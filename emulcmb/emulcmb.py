@@ -159,6 +159,7 @@ class emulcmb(Theory):
             phiphi = self.predict_phi(self.M[3],p,self.info[3],self.tmat[3])[0]
             state["pp"][2:len(phiphi)+2] = phiphi
         # cl calculation ends ---------------------------
+        
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
