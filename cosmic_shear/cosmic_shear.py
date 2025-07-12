@@ -16,8 +16,6 @@ class cosmic_shear(Theory):
 
     def initialize(self):
         super().initialize()
-
-        #PATH = os.environ.get("ROOTDIR") + "/" + self.extra_args.get('filename')
         RT = os.environ.get("ROOTDIR")
 
         # read the block from the YAML
@@ -32,9 +30,7 @@ class cosmic_shear(Theory):
 
         # construct the requirements
         req_params = np.concatenate((self.ord,self.fast_params))
-
         self.req = {}
-
         for p in req_params:
             self.req[p] = None
 
@@ -44,13 +40,11 @@ class cosmic_shear(Theory):
         torch.set_default_device(self.device)
 
         # construct the network and load the weights
-        self.model = ResTRF(
-                        input_dim = len(self.ord),
-                        output_dim = self.extrapar['OUTPUT_DIM'],
-                        int_dim_res = self.extrapar['INT_DIM_RES'],
-                        int_dim_trf = self.extrapar['INT_DIM_TRF'],
-                        N_channels = self.extrapar['NC_TRF']
-        )
+        self.model = ResTRF(input_dim = len(self.ord),
+                            output_dim = self.extrapar['OUTPUT_DIM'],
+                            int_dim_res = self.extrapar['INT_DIM_RES'],
+                            int_dim_trf = self.extrapar['INT_DIM_TRF'],
+                            N_channels = self.extrapar['NC_TRF'])
         self.model.to(self.device)
         state_dict = torch.load(self.file, map_location=self.device)
         self.model.load_state_dict(state_dict)
@@ -68,27 +62,12 @@ class cosmic_shear(Theory):
                 # right here I would like to have a "trained_params" 
                 # so that we can check that ordering is correct!
                 # we can save users from a simple mistake this way
-
         elif '.npy' in extra:
             # stuff, idk how its structured
             pass
-
+        
         # invert the rotation matrix so that we don't do it every time we evaluate
         self.inv_dv_evecs = torch.linalg.inv(self.dv_evecs)
-
-        # for fast parameters
-        self.shear_calib_mask = np.load(RT + '/external_modules/data/cosmic_shear/shear_calib_mask.npy')[:,:780] 
-
-    def add_shear_calib(self, m, datavector):
-        # this is to get a working datavector calculation in the emulator.
-        # we need to figure out how to apply shear calibration without the mask
-        # or how to generate a mask.
-
-        for i in range(5):
-            factor = (1 + m[i])**self.shear_calib_mask[i]
-            factor = factor[0:780]
-            datavector = factor * datavector
-        return datavector
 
     def get_requirements(self):
         # remove shear calibration here and add to likelihood to make for cobaya speed hierarchy?
@@ -97,22 +76,17 @@ class cosmic_shear(Theory):
     def calculate(self, state, want_derived = True, **params):
         X = [params[p] for p in self.ord]
         M = [params[p] for p in self.fast_params]
-
         with torch.no_grad():
             y_pred = self.M[0]((torch.Tensor(X).to(self.device) - self.samples_mean) / self.samples_std)
-
         y_pred = (y_pred * self.dv_evals) @ self.inv_dv_evecs + self.dv_fid
-
-        state["lsst_y1_xi"] = self.add_shear_calib(M,y_pred[0].cpu().detach().numpy())
-        np.savetxt('/home/grads/extra_data/evan/cocoa/Cocoa/state.txt',state["lsst_y1_xi"])
-
+        state["cosmic_shear"] = y_pred[0].cpu().detach().numpy()
         return True
 
     def get_can_support_params(self):
-        return ['lsst_y1_xi']
+        return ['cosmic_shear']
 
-    def get_lsst_y1_xi(self):
-        return self.current_state['lsst_y1_xi']
+    def get_cosmic_shear(self):
+        return self.current_state['cosmic_shear']
 
 
 
