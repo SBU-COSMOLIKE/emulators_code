@@ -128,7 +128,7 @@ class emulcmb(Theory):
     def get_requirements(self):
         return self.req
 
-    def predict_cmb(self, X, i):
+    def predict_data_vector(self, X, i):
         X = torch.Tensor(X).to(self.device)
         with torch.no_grad():
             X_norm = torch.nan_to_num((X-self.X_mean[i])/self.X_std[i],nan=0).to(self.device)
@@ -145,16 +145,18 @@ class emulcmb(Theory):
         idx  = np.where(self.eval[:3])[0]
         for i in idx:
             params = self.ord[i]
-            p = np.array([par[key] for key in params])
-            logAs  = p[params.index('logA')]
-            tau    = p[params.index('tau')]
+            X = np.array([par[key] for key in params])
+            logAs  = X[params.index('logA')]
+            tau    = X[params.index('tau')]
             norm   = np.exp(logAs)/np.exp(2*tau)
             lmax   = self.extra_args.get('extrapar')[i]['ellmax']
-            state[self.cmb[i]][2:lmax] = self.predict_cmb(p,i)*norm
+            state[self.cmb[i]][2:lmax] = self.predict_data_vector(X,i)*norm
         state["et"] = state["te"]
         i=3
         if self.eval[i]:
-            phiphi = self.predict_cmb(p,i)[0]
+            params = self.ord[i]
+            X = np.array([par[key] for key in params])
+            phiphi = self.predict_data_vector(X,i)[0]
             state["pp"][2:len(phiphi)+2] = phiphi
         return True
 
