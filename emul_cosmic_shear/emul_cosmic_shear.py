@@ -16,57 +16,59 @@ class emul_cosmic_shear(Theory):
     def initialize(self):
         super().initialize()
         RT = os.environ.get("ROOTDIR")
-
-        # read the block from the YAML
+        imax = 1
+        for name in ("M", "info", "ord", "extrapar"):
+            setattr(self, name, [None] * imax)
+        for name in ("samples_mean", "samples_std", "dv_fid", "dv_evals", "dv_evecs", "inv_dv_evecs"):
+            setattr(self, name, [None] * imax)
+        self.req   = [] 
         self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
-        self.file = self.extra_args.get('file')[0]
-        self.extra = self.extra_args.get('extra')[0]
-        self.ord = self.extra_args.get('ord')[0]
-        self.extrapar = self.extra_args.get('extrapar')[0]
-        
-        self.req = {} # construct the requirements
-        for p in self.ord:
-            self.req[p] = None
 
-        # construct the network and load the weights
-        self.model = ResTRF(input_dim = len(self.ord),
-                            output_dim = self.extrapar['OUTPUT_DIM'],
-                            int_dim_res = self.extrapar['INT_DIM_RES'],
-                            int_dim_trf = self.extrapar['INT_DIM_TRF'],
-                            N_channels = self.extrapar['NC_TRF'])
-        self.model.to(self.device)
-        state_dict = torch.load(self.file, map_location=self.device)
-        self.model.load_state_dict(state_dict)
-        self.model.eval()
-        self.M.append(self.model)
+        for i in range(imax):
+            self.info[i] = self.extra_args.get('extra')[i]
+            # load extra stuff for
+            if 'h5' in self.info[i]:
+                with h5.File(self.info[i], 'r') as f:
+                    self.samples_mean[i] = torch.Tensor(f['sample_mean'][:]).to(self.device)
+                    self.samples_std[i] = torch.Tensor(f['sample_std'][:]).to(self.device)
+                    self.dv_fid[i] = torch.Tensor(f['dv_fid'][:]).to(self.device)
+                    self.dv_evals[i] = torch.Tensor(f['dv_evals'][:]).to(self.device)
+                    self.dv_evecs[i] = torch.Tensor(f['dv_evecs'][:]).to(self.device)
+                    # right here I would like to have a "trained_params" 
+                    # so that we can check that ordering is correct!
+                    # we can save users from a simple mistake this way
+            # invert the rotation matrix so that we don't do it every time we evaluate
+            self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
 
-        # load extra stuff for
-        if 'h5' in self.extra:
-            with h5.File(self.extra, 'r') as f:
-                self.samples_mean  = torch.Tensor(f['sample_mean'][:]).to(self.device)
-                self.samples_std   = torch.Tensor(f['sample_std'][:]).to(self.device)
-                self.dv_fid        = torch.Tensor(f['dv_fid'][:]).to(self.device)
-                self.dv_evals      = torch.Tensor(f['dv_evals'][:]).to(self.device)
-                self.dv_evecs      = torch.Tensor(f['dv_evecs'][:]).to(self.device)
-                # right here I would like to have a "trained_params" 
-                # so that we can check that ordering is correct!
-                # we can save users from a simple mistake this way
-        elif '.npy' in extra:
-            # stuff, idk how its structured
-            pass
-        
-        # invert the rotation matrix so that we don't do it every time we evaluate
-        self.inv_dv_evecs = torch.linalg.inv(self.dv_evecs)
+            self.ord[i] = self.extra_args.get('ord')[i]
+            self.extrapar[i] = self.extra_args["extrapar"][i].copy()
+
+            if self.extrapar[i]['MLA'] == 'TRF':
+                self.M[i] = ResTRF(input_dim = len(self.ord[i]),
+                                   output_dim  = self.extrapar[i]['OUTPUT_DIM'],
+                                   int_dim_res = self.extrapar[i]['INT_DIM_RES'],
+                                   int_dim_trf = self.extrapar[i]['INT_DIM_TRF'],
+                                   N_channels  = self.extrapar[i]['NC_TRF'])
+            self.M[i] = self.M[i].to(self.device)
+            self.M[i].load_state_dict(torch.load(self.extra_args.get('file')[i],map_location=self.device))
+            self.M[i] = self.M[i].eval()
+            self.req.extend(self.ord[i])
+
+        self.req = list(set(self.req))
+        d = {}
+        for i in self.req:
+            d[i] = None
+        self.req = d
 
     def get_requirements(self):
-        # remove shear calibration here and add to likelihood to make for cobaya speed hierarchy?
         return self.req
 
-    def calculate(self, state, want_derived = True, **params):
-        X = [params[p] for p in self.ord]
+    def calculate(self, state, want_derived=True, **params):
+        i = 0
+        X = [params[p] for p in self.ord[i]]
         with torch.no_grad():
-            y_pred = self.M[0]((torch.Tensor(X).to(self.device) - self.samples_mean) / self.samples_std)
-        y_pred = (y_pred * self.dv_evals) @ self.inv_dv_evecs + self.dv_fid
+            y_pred = self.M[i]((torch.Tensor(X).to(self.device)-self.samples_mean[i])/self.samples_std[i])
+        y_pred = (y_pred * self.dv_evals[i]) @ self.inv_dv_evecs[i] + self.dv_fid[i]
         state["cosmic_shear"] = y_pred[0].cpu().detach().numpy()
         return True
 

@@ -93,12 +93,9 @@ class emultheta(Theory):
     def predict(self, X, Y_mean, Y_std, model):
         with torch.no_grad():
             X = torch.Tensor(X).to(self.device)
-            
             pred = model(X)
-            
             M_pred = pred.to(self.device).float().cpu().numpy()
             y_pred = (M_pred *Y_std+Y_mean)
-            
         return y_pred
 
     def calculate(self, state, want_derived=False, **params):
