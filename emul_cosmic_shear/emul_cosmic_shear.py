@@ -68,7 +68,7 @@ class emul_cosmic_shear(Theory):
         X = [params[p] for p in self.ord[i]]
         with torch.no_grad():
             y_pred = self.M[i]((torch.Tensor(X).to(self.device)-self.samples_mean[i])/self.samples_std[i])
-        y_pred = (y_pred * self.dv_evals[i]) @ self.inv_dv_evecs[i] + self.dv_fid[i]
+        y_pred = (y_pred*self.dv_evals[i]) @ self.inv_dv_evecs[i] + self.dv_fid[i]
         state["cosmic_shear"] = y_pred[0].cpu().detach().numpy()
         return True
 
