@@ -140,7 +140,7 @@ class emulcmb(Theory):
             return np.exp(np.matmul(y_pred,self.tmat[i])*self.Y_std_2[i] + self.Y_mean_2[i])     
         
     def calculate(self, state, want_derived=False, **par):
-        state.update({self.cmb[i]: np.zeros(self.lmax_theory) for i in range(5)} |
+        state.update({self.cmb[i]: np.zeros(self.lmax_theory) for i in range(len(self.cmb))} |
                      {"ell": self.ell.astype(int)})
         idx  = np.where(self.eval[:3])[0]
         for i in idx:
