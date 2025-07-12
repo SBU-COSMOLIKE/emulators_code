@@ -139,13 +139,9 @@ class emulcmb(Theory):
         else:
             return np.exp(np.matmul(y_pred,self.tmat[i])*self.Y_std_2[i] + self.Y_mean_2[i])     
         
-    def calculate(self, state, want_derived=False, **params):
-        par = params.copy()
-
-        # cl calculation begins ---------------------------
-        state["ell"] = self.ell.astype(int)
-        state.update({self.cmb[i]: np.zeros(self.lmax_theory) for i in range(5)})
-        
+    def calculate(self, state, want_derived=False, **par):
+        state.update({self.cmb[i]: np.zeros(self.lmax_theory) for i in range(5)} |
+                     {"ell": self.ell.astype(int)})
         idx  = np.where(self.eval[:3])[0]
         for i in idx:
             params = self.ord[i]
@@ -154,13 +150,12 @@ class emulcmb(Theory):
             tau    = p[params.index('tau')]
             norm   = np.exp(logAs)/np.exp(2*tau)
             lmax   = self.extra_args.get('extrapar')[i]['ellmax']
-            state[self.cmb[i]][2:lmax] = self.predict_cmb(p, i)*norm
+            state[self.cmb[i]][2:lmax] = self.predict_cmb(p,i)*norm
         state["et"] = state["te"]
         i=3
         if self.eval[i]:
             phiphi = self.predict_cmb(p,i)[0]
             state["pp"][2:len(phiphi)+2] = phiphi
-        # cl calculation ends ---------------------------
         return True
 
     def get_Cl(self, ell_factor = False, units = "1", unit_included = True, Tcmb=2.7255):
