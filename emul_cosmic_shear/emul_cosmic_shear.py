@@ -40,6 +40,12 @@ class emul_cosmic_shear(Theory):
                    (tmp[i] is None or (isinstance(tmp[i], str) and tmp[i].strip().lower()=="none")) 
                    for i in range(imax)):
                 raise ValueError(msg)
+        for i in range(imax):
+            if not self.eval[i]:
+                continue
+            self.extrapar[i] = self.extra_args["extrapar"][i].copy()
+            if not isinstance(self.extrapar[i], dict):
+                raise ValueError('Emulator Cosmic Shear: extrapar option not a dictionary')
         # BASIC CHECKS ENDS ------------------------------------------------
         
         for i in range(imax):
@@ -59,7 +65,6 @@ class emul_cosmic_shear(Theory):
             self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
 
             self.ord[i] = self.extra_args.get('ord')[i]
-            self.extrapar[i] = self.extra_args["extrapar"][i].copy()
 
             if self.extrapar[i]['MLA'] == 'TRF':
                 self.M[i] = ResTRF(input_dim = len(self.ord[i]),
