@@ -1,16 +1,17 @@
-import numpy as np
-import os
-import sys
-import torch
+import torch, os, sys
 import torch.nn as nn
+import numpy as np
 from cobaya.theory import Theory
-from cobaya.typing import InfoDict
+from cobaya.theories.emul_cosmic_shear.emulator import ResTRF
+from typing import Mapping, Iterable
+from cobaya.typing import empty_dict, InfoDict
 import h5py as h5
 sys.path.append(os.path.dirname(__file__))
-from cobaya.theories.emul_cosmic_shear.emulator import ResTRF
 
 class emul_cosmic_shear(Theory):
+    renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
+    _must_provide: dict
     path: str
 
     def initialize(self):
