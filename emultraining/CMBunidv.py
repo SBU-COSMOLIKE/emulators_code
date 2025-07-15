@@ -37,9 +37,9 @@ z = np.arange(0,3,0.005) #this redshift is for BAOSN
 len_z          = len(z)
 
 #MPS setup
-z_mps = np.arange(0,30,1500) #MPS redshift grid
-k_max = 1e2 #maximum k
-k_min = 1e-4 #minimum k
+z_mps = np.linspace(0,30,1500) #MPS redshift grid
+kh_max = 1e2 #maximum k/h
+kh_min = 1e-4 #minimum k/h
 k_n_points = 2000 #Number of k's
 len_mps = len(z_mps)
 
@@ -130,7 +130,7 @@ for i in range(num_datavector):
     try:
         camb_params.NonLinear = model.NonLinear_none
         results_lin = camb.get_results(camb_params)
-        pk_linear = results_lin.get_matter_power_spectrum(minkh=k_min, maxkh=k_max, npoints=k_n_points)[2]
+        pk_linear = results_lin.get_matter_power_spectrum(minkh=kh_min, maxkh=kh_max, npoints=k_n_points)[2]
         
 
         camb_params.NonLinear = camb.model.NonLinear_both
@@ -138,7 +138,7 @@ for i in range(num_datavector):
 
         results = camb.get_results(camb_params)
 
-        pk_nonlinear = results.get_matter_power_spectrum(minkh=k_min, maxkh=k_max, npoints=k_n_points)[2]
+        pk_nonlinear = results.get_matter_power_spectrum(minkh=kh_min, maxkh=kh_max, npoints=k_n_points)[2]
         powers  = results.get_cmb_power_spectra(
             camb_params, 
             CMB_unit = 'muK',
