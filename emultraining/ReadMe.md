@@ -7,11 +7,11 @@ The user needs to specify the upper and lower limits, and the number of data vec
 ```
 python datagenerator.py
 ```
-# CMBunidv.py <a name="overview"></a>
+## CMBunidv.py <a name="overview"></a>
 This file needs the user to specify the input file name. This file will then run an MPI job to generate the
 CMBlensed power spectra, hubble parameter and supernovae luminosity distance on the specified redshift, $r_{\rm drag}$
 and $100\theta^*$, and linear and nonlinear Matter Power spectra.
-The user can use the CMBunidv.sh file to submit those mpi jobs on seawulf with
+The user can use the CMBunidv.sh file to submit those mpi jobs on Seawulf with
 ```
 sbatch --array=i-j CMBunidv.sh
 ```
