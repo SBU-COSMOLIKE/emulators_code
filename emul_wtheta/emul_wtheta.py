@@ -2,13 +2,13 @@ import torch, os, sys
 import torch.nn as nn
 import numpy as np
 from cobaya.theory import Theory
-from cobaya.theories.wtheta.emulator import ResTRF
+from cobaya.theories.emul_wtheta.emulator import ResTRF
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 import h5py as h5
 sys.path.append(os.path.dirname(__file__))
 
-class emul_gg(Theory):
+class emul_wtheta(Theory):
     renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = { }
     _must_provide: dict
