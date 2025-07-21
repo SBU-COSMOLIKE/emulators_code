@@ -100,9 +100,6 @@ class emul_cosmic_shear(Theory):
         state["cosmic_shear"] = self.predict_data_vector(X,i)
         return True
 
-    def get_can_support_params(self):
-        return ['cosmic_shear']
-
     def get_cosmic_shear(self):
         return self.current_state['cosmic_shear']
 

@@ -21,8 +21,9 @@ class emulbaosn(Theory):
         for name in ("M", "info", "ord", "z", "tmat", "extrapar", "offset"):
             setattr(self, name, [None] * self.imax)
         self.req = [] 
+        
         self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
-                
+        
         # BASIC CHECKS BEGINS --------------------------------------------------
         _required_lists = [
             ("extra", "Emulator BAOSN: Missing emulator file (extra) option"),
@@ -142,63 +143,89 @@ class emulbaosn(Theory):
         return C
    
     def calculate(self, state, want_derived=True, **params):       
-        par = params.copy()
-        out = ["dl","H"]
         # H(z) ------------------------------------------------------------
         i = 1
-        params = self.extra_args.get('ord')[i]
-        p = np.array([par[key] for key in params])
-        state[out[i]] = self.predict(self.M[i], p, self.info[i], self.tmat[i], self.offset[i])
+        p = np.array([params[key] for key in self.extra_args.get('ord')[i]])
+        #state["zH"] = self.z[1]
+        #state["H"]  = self.predict(self.M[i], 
+        #                           p, 
+        #                           self.info[i], 
+        #                           self.tmat[i], 
+        #                           self.offset[i])
+        H = self.predict(self.M[i], 
+                         p, 
+                         self.info[i], 
+                         self.tmat[i], 
+                         self.offset[i])
+        state["H_interp"] = interpolate.interp1d(self.z[1], 
+                                                 H,
+                                                 kind='cubic',
+                                                 assume_sorted=True,
+                                                 fill_value="extrapolate")
         # SN ------------------------------------------------------------
         i = 0
-        func  = interpolate.interp1d(self.z[1], 2.99792458e5/state["H"],
+        func  = interpolate.interp1d(self.z[1], 2.99792458e5/H,
                                      kind='cubic',
                                      assume_sorted=True,
                                      fill_value="extrapolate")
         zstep = np.linspace(0.0, self.z[0][-1], 2*len(self.z[0])+1)
-        dl    = self.cumulative_simpson(zstep, func(zstep))*(1 + zstep)
-        state[out[i]] = interpolate.interp1d(zstep, dl, 
-                                             kind='cubic',
-                                             assume_sorted=True,
-                                             fill_value="extrapolate")(self.z[0])
-        
+        dl    = self.cumulative_simpson(zstep,func(zstep))*(1 + zstep)
+        state["da_interp"] = interpolate.interp1d(zstep, 
+                                                  dl/(1.0+zstep)**2,
+                                                  kind='cubic',
+                                                  assume_sorted=True,
+                                                  fill_value="extrapolate")
+        #state["zdl"] = self.z[0]
+        #state["dl"]  = state["dl_interp"](self.z[0])
+        #state["zda"] = self.z[0]
+        #state["da"]  = state["da_interp"](self.z[0])
 
     def get_angular_diameter_distance(self, z):
-        d_l = self.current_state["dl"].copy()
-        d_a = d_l/(1.0 + self.z[0])**2
-        D_A_interpolate = interpolate.interp1d(self.z[0], d_a,kind='cubic',
-                                             assume_sorted=True,fill_value="extrapolate")
-        D_A = D_A_interpolate(z)
+        DA = self.current_state["da_interp"](z)
         try:
-            l = len(D_A)
+            l = len(DA)
         except:
-            D_A = np.array([D_A])
+            DA = np.array([DA])
         else:
             l = 1
-        return D_A
+        return DA
+
+    def get_comoving_radial_distance(self, z):
+        DA = self.current_state["da_interp"](z)
+        try:
+            l = len(DA)
+        except:
+            DA = np.array([DA])
+        else:
+            l = 1
+        return DA*(1+z)
+    
+    def get_luminosity_distance(self, z):
+        DA = self.current_state["da_interp"](z)
+        try:
+            l = len(DA)
+        except:
+            DA = np.array([DA])
+        else:
+            l = 1
+        return DA*(1+z)*(1+z)
 
     def get_angular_diameter_distance_2(self, zpair):
         z_1, z_2 = zpair[0]
-        
         if z_1 >= z_2:
             return 0
         else:
-            da1 = self.get_angular_diameter_distance(z_1)
-            da2 = self.get_angular_diameter_distance(z_2)
-            cd1 = da1*(1+z_1)
-            cd2 = da2*(1+z_2)
-            return (cd2-cd1)/(1+z_2)
+            DA  = self.current_state["da_interp"]
+            return (DA(z_2)*(1+z_2) - DA(z_1)*(1+z_1))/(1+z_2)
 
     def get_Hubble(self, z, units = "km/s/Mpc"):
-        H = self.current_state["H"].copy()
-        H_interpolate = interpolate.interp1d(self.z[1], H)
-        H_arr = H_interpolate(z)
+        H = self.current_state["H_interp"](z)
         try:
-            l = len(H_arr)
+            l = len(H)
         except:
-            H_arr = np.array([H_arr])
+            H = np.array([H])
         else:
             l = 1
         if units == "1/Mpc":
-            H_arr /= 2.99792458e5
-        return H_arr
+            H /= 2.99792458e5
+        return H

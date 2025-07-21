@@ -115,13 +115,16 @@ class emultheta(Theory):
         
         h2       = (H0/100.0)**2
         omegamh2 = par["omegamh2"]
-
+        omegabh2 = par["omegabh2"]
         par.update({"H0": H0})
         par.update({"omegam": omegamh2/h2})   
+        par.update({"omegab": omegabh2/h2})   
         state.update({"H0": par["H0"]})
-        state.update({"omegam": par["omegam"]})    
+        state.update({"omegam": par["omegam"]})
+        state.update({"omegab": par["omegab"]})
         state["derived"].update({"H0": par["H0"]})
-        state["derived"].update({"omegam": par["omegam"]})   
+        state["derived"].update({"omegam": par["omegam"]})
+        state["derived"].update({"omegab": par["omegab"]})
         return True
 
     def get_H0(self):
@@ -131,4 +134,7 @@ class emultheta(Theory):
     def get_omegam(self):
         state = self.current_state.copy()
         return state["omegam"]
- 
+
+    def get_omegab(self):
+        state = self.current_state.copy()
+        return state["omegam"]
