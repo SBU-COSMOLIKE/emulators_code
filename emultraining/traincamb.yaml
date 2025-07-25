@@ -1,0 +1,162 @@
+stop_at_error: False
+debug: False
+timing: true
+
+likelihood:
+  planck_2018_highl_plik.TTTEEE_lite:
+    path: ./external_modules/
+    clik_file: plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
+  sn.union3: 
+    path: ./external_modules/data/sn_data
+  planck_2018_lensing.clik:
+    path: ./external_modules/
+    #clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_agr2.clik_lensing
+    clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing
+
+
+params:
+  
+  omegabh2:
+    prior:
+      min: 0.0
+      max: 0.04
+    ref:
+      dist: norm
+      loc: 0.022383
+      scale: 0.005
+    proposal: 0.005
+    latex: \Omega_\mathrm{b} h^2
+  omegach2:
+    prior:
+      min: 0.0
+      max: 0.5
+    ref:
+      dist: norm
+      loc: 0.12011
+      scale: 0.03
+    proposal: 0.03
+    latex: \Omega_\mathrm{c} h^2
+  H0:
+    prior:
+      min: 20
+      max: 120
+    ref:
+      dist: norm
+      loc: 67
+      scale: 2
+    proposal: 0.001
+    latex: H_0
+  tau:
+    prior:
+      min: 0.01
+      max: 0.2
+    ref:
+      dist: norm
+      loc: 0.055
+      scale: 0.006
+    proposal: 0.003
+    latex: \tau_\mathrm{reio}
+
+  logA:
+    prior:
+      min: 1.61
+      max: 3.91
+    ref:
+      dist: norm
+      loc: 3.0448
+      scale: 0.05
+    proposal: 0.05
+    latex: \log(10^{10} A_\mathrm{s})
+    drop: true
+  ns:
+    prior:
+      min: 0.6
+      max: 1.3
+    ref:
+      dist: norm
+      loc: 0.96605
+      scale: 0.005
+    proposal: 0.005
+    latex: n_\mathrm{s}
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  mnu:
+    value: 0.06
+
+  A_planck:
+    value: 1
+  thetastar:
+    derived: true
+    latex: \Theta_\star
+  rdrag:
+    derived: True
+    latex: r_\mathrm{drag}
+
+
+
+
+#[evaluate]    chi2_planck_2018_highl_plik.TTTEEE_lite = 589.897
+#[evaluate]    chi2_planck_2018_lowl.TT = 23.057
+#[evaluate]    chi2_planck_2018_lowl.EE = 396.025
+#[evaluate]    chi2_sn.union3 = 26.5015
+#[evaluate]    chi2_sn.pantheon = 1035.21
+#[evaluate]    chi2_sn.pantheonplus = 1403.85
+#[evaluate]    chi2_sn.desy5 = 1645.36
+#[evaluate]    chi2_bao.desi_2024_bao_all = 19.8994
+#[evaluate]    chi2_bao.desi_dr2.desi_bao_all = 26.6545
+#[evaluate]    chi2_planck_2018_lensing.clik = 8.96505
+#[evaluate]    chi2_act_dr6_lenslike.ACTDR6LensLike = 20.0963
+
+#theory:
+#  camb:
+#    path: ./external_modules/code/CAMB
+#    extra_args:
+#      halofit_version: original
+#      #dark_energy_model: ppf
+#      lmax: 3700
+#      AccuracyBoost: 1.0
+#sampler:
+#  evaluate:
+#    override:
+#      logA: 3.044783832128357
+#      ns: 0.9660499
+#      omegabh2: 0.0223828
+#      omegach2: 0.1201075
+#      H0: 67.5
+#      tau: 0.05430842
+#      A_planck: 1.00138
+
+
+theory:
+  camb:
+    path: ./external_modules/code/CAMB
+    extra_args:
+      halofit_version: mead2020
+      #dark_energy_model: ppf
+      lmax: 15000
+      AccuracyBoost: 1.2
+      z_outputs: [0]
+
+train_args:
+  extra_args:
+    ord: [['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns']]
+    camb_ell_min: 2
+    camb_ell_max: 5000
+  training_data_path: './trainingdata/'
+  train_datavectors_file: 'traindvfilename'
+  train_parameters_file: 'trainparamfilename.npy'
+  valid_datavectors_file: 'validdvfilename'
+  valid_parameters_file: 'validparamfilename.npy'
+  test_datavectors_file: 'testdvfilename'
+  test_parameters_file: 'testparamfilename.npy'
+  train_u_bound: [0.038, 0.235, 114, 0.15, 3.6, 1.3]
+  train_l_bound: [0,     0.03,  25,  0.007, 1.61, 0.7]
+  vali_u_bound: [0.035,  0.22, 110, 0.14, 3.5, 1.2]
+  vali_l_bound: [0.008,  0.04, 30, 0.01, 1.7, 0.8]
+  n_train: 100
+  n_test: 100
+  n_valid: 100
+
+
+output: ./projects/axions/chains/EXAMPLE_EVALUATE0
