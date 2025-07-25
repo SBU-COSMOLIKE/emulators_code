@@ -155,15 +155,12 @@ class dataset:
         #    )
 
         for i in range(num_datavector):
-            print(self.model.parameterization.sampled_params())
             input_params = self.model.parameterization.to_input(param_info[i])
-            print(input_params)
             input_params.pop("As", None)
-            self.model.logposterior(input_params)
-            theory = list(self.model.theory.values())[1]
-            print(theory)
 
             try:
+                self.model.logposterior(input_params)
+                theory = list(self.model.theory.values())[1]
                 cmb = theory.get_Cl()
                 #dL = theory.get_angular_diameter_distance(z)*(1+z)
                 #H = theory.get_Hubble(z, units='km/s/Mpc')
