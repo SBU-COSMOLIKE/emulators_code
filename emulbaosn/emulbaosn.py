@@ -179,6 +179,7 @@ class emulbaosn(Theory):
         #state["dl"]  = state["dl_interp"](self.z[0])
         #state["zda"] = self.z[0]
         #state["da"]  = state["da_interp"](self.z[0])
+        np.save('snemultest.npy',state)
 
     def get_angular_diameter_distance(self, z):
         DA = self.current_state["da_interp"](z)

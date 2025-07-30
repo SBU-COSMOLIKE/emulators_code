@@ -4,237 +4,351 @@ from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 import sys
 import os
+import platform
 import yaml
 from mpi4py import MPI
 from scipy.stats import qmc
 import copy
-from tqdm import tqdm
-import time
+import functools, iminuit, copy, argparse, random, time 
+import emcee, itertools
+from schwimmbad import MPIPool
 
 
-comm = MPI.COMM_WORLD
+parser = argparse.ArgumentParser(prog='cos_uniform')
 
-class dataset:
-    def __init__(self, cobaya_yaml, mode='train'):
-        self.cobaya_yaml = cobaya_yaml
-        self.mode = mode
-        info = yaml_load(cobaya_yaml)
+parser.add_argument("--N",
+                    dest="N",
+                    help="Number of points requested",
+                    type=int,
+                    nargs='?',
+                    const=1,
+                    default=100)
+parser.add_argument("--camb_ell_min",
+                    dest="camb_ell_min",
+                    help="minimum of ell output",
+                    type=int,
+                    nargs='?',
+                    const=1,
+                    default=2)
+parser.add_argument("--camb_ell_max",
+                    dest="camb_ell_max",
+                    help="maximum of ell output",
+                    type=int,
+                    nargs='?',
+                    const=1,
+                    default=5000)
 
-        self.model = get_model(info)
+parser.add_argument("--mode",
+                    dest="mode",
+                    help="mode of points generated",
+                    type=str,
+                    nargs='?',
+                    const=1,
+                    default='train')
+parser.add_argument("--l_bound",
+                    dest="l_bound",
+                    help="lower bound for parameters",
+                    type=list,
+                    nargs='?',
+                    const=1,
+                    default=None)
+parser.add_argument("--u_bound",
+                    dest="u_bound",
+                    help="upper bound for parameters",
+                    type=list,
+                    nargs='?',
+                    const=1,
+                    default=None)
+parser.add_argument("--ordering",
+                    dest="ordering",
+                    help="Ordering of parameters",
+                    type=list,
+                    nargs='?',
+                    const=1,
+                    default=None)
+parser.add_argument("--data_path",
+                    dest="data_path",
+                    help="Directory for saving the data files",
+                    type=str,
+                    nargs='?',
+                    const=1,
+                    default='/data/')
+parser.add_argument("--datavectors_file",
+                    dest="datavectors_file",
+                    help="Name for data vector files (no .npy included)",
+                    type=str,
+                    nargs='?',
+                    const=1,
+                    default='cos_uni')
+parser.add_argument("--parameters_file",
+                    dest="parameters_file",
+                    help="Name for Parameter files (.npy included)",
+                    type=str,
+                    nargs='?',
+                    const=1,
+                    default='cos_uni_input.npy')
 
-        # we need so more info from the cobaya yaml: the fiducial cosmology and covmat_file
-        with open(self.cobaya_yaml,'r') as stream:
-            args = yaml.safe_load(stream)
+####add yaml here, and make all input paratemers passing in
+yaml_string=r"""
 
-        self.sampled_params = args['train_args']['extra_args']['ord'][0]
-        self.prior_params = list(self.model.parameterization.sampled_params())
-        self.camb_ell_min = args['train_args']['extra_args']['camb_ell_min']
-        self.camb_ell_max = args['train_args']['extra_args']['camb_ell_max']
-        # we need to match the ordering. 
-        # We can do this via indexes and just shuffle around the samples 
-        # when computing the prior.
-        # we also want to check all prior params are in sampled params.
-        self.sampling_dim = len(self.sampled_params)
+likelihood:
+  planck_2018_highl_plik.TTTEEE_lite:
+    path: ./external_modules/
+    clik_file: plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
 
-        self.PATH = os.environ.get("ROOTDIR") + '/' + args['train_args']['training_data_path']
+  planck_2018_lensing.clik:
+    path: ./external_modules/
+    #clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_agr2.clik_lensing
+    clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing
 
-        if mode=='train':
-            self.N = args['train_args']['n_train']
-            self.datavectors_file = self.PATH + args['train_args']['train_datavectors_file']
-            self.parameters_file  = self.PATH + args['train_args']['train_parameters_file']
-            self.u_bound = args['train_args']['train_u_bound']
-            self.l_bound = args['train_args']['train_l_bound']
 
-        elif mode=='valid':
-            self.N = args['train_args']['n_valid']
-            self.datavectors_file = self.PATH + args['train_args']['valid_datavectors_file']
-            self.parameters_file  = self.PATH + args['train_args']['valid_parameters_file']
-            self.u_bound = args['train_args']['vali_u_bound']
-            self.l_bound = args['train_args']['vali_l_bound']
+params:
+  
+  omegabh2:
+    prior:
+      min: 0.0
+      max: 0.04
+    ref:
+      dist: norm
+      loc: 0.022383
+      scale: 0.005
+    proposal: 0.005
+    latex: \Omega_\mathrm{b} h^2
+  omegach2:
+    prior:
+      min: 0.0
+      max: 0.5
+    ref:
+      dist: norm
+      loc: 0.12011
+      scale: 0.03
+    proposal: 0.03
+    latex: \Omega_\mathrm{c} h^2
+  H0:
+    prior:
+      min: 20
+      max: 120
+    ref:
+      dist: norm
+      loc: 67
+      scale: 2
+    proposal: 0.001
+    latex: H_0
+  tau:
+    prior:
+      min: 0.01
+      max: 0.2
+    ref:
+      dist: norm
+      loc: 0.055
+      scale: 0.006
+    proposal: 0.003
+    latex: \tau_\mathrm{reio}
 
-        elif mode=='test':
-            self.N = args['train_args']['n_test']
-            self.datavectors_file = self.PATH + args['train_args']['test_datavectors_file']
-            self.parameters_file  = self.PATH + args['train_args']['test_parameters_file']
-            self.u_bound = args['train_args']['vali_u_bound']
-            self.l_bound = args['train_args']['vali_l_bound']
+  logA:
+    prior:
+      min: 1.61
+      max: 3.91
+    ref:
+      dist: norm
+      loc: 3.0448
+      scale: 0.05
+    proposal: 0.05
+    latex: \log(10^{10} A_\mathrm{s})
+    drop: true
+  ns:
+    prior:
+      min: 0.6
+      max: 1.3
+    ref:
+      dist: norm
+      loc: 0.96605
+      scale: 0.005
+    proposal: 0.005
+    latex: n_\mathrm{s}
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  mnu:
+    value: 0.06
 
+  A_planck:
+    value: 1
+  thetastar:
+    derived: true
+    latex: \Theta_\star
+  rdrag:
+    derived: True
+    latex: r_\mathrm{drag}
+
+theory:
+  camb:
+    path: ./external_modules/code/CAMB
+    extra_args:
+      halofit_version: mead2020
+      #dark_energy_model: ppf
+      lmax: 7000
+      AccuracyBoost: 1.5
+      lens_potential_accuracy: 8
+      lens_k_eta_reference: 18000.0
+      nonlinear: NonLinear_both
+      recombination_model: CosmoRec
+      Accuracy.AccurateBB: True
+
+
+
+output: ./projects/axions/chains/EXAMPLE_EVALUATE0
+
+"""
+
+
+####add main function.
 
 
 #===================================================================================================
 # datavectors
 
-    def generate_parameters(self, save=True):
-        if self.mode=='train':
-            D = len(self.u_bound)
-            N_LHS = int(0.05*self.N)
-            sampler = qmc.LatinHypercube(d=D)
-            sample = sampler.random(n=N_LHS)
-            sample_scaled = qmc.scale(sample, self.l_bound, self.u_bound)
-
-            N_uni = self.N-N_LHS
-            data = np.random.uniform(low=self.l_bound, high=self.u_bound, size=(N_uni, D))
-            self.samples = np.concatenate((sample_scaled, data), axis=0)
-        else:
-            self.samples = np.random.uniform(low=self.l_bound, high=self.u_bound, size=(self.N, D))
-
-        if save:
-            np.save(self.parameters_file, self.samples)
-            print('(Input Parameters) Saved!')
-
-
-
-
-    def generate_datavectors(self, save=True):
-        rank = comm.Get_rank()
-        num_ranks = comm.Get_size()
-
-        print('rank',rank,'is at barrier')
-        z1=np.linspace(0,3,600, endpoint=False)
-        z2=np.linspace(3,1200,200)
-        z = np.concatenate((z1,z2),axis=0) #this redshift is for BAOSN
-        len_z          = len(z)
-
-        #MPS setup
-        z1_mps = np.linspace(0,2,100,endpoint=False)
-        z2_mps = np.linspace(2,10,10,endpoint=False)
-        z3_mps = np.linspace(10,50,12)
-        z_mps = np.concatenate((z1_mps,z2_mps,z3_mps),axis=0)
-        kh_max = 1e2 #maximum k/h
-        kh_min = 1e-4 #minimum k/h
-        k_n_points = 2000 #Number of k's
-        len_mps = len(z_mps)
+def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=False):
+    D = len(u_bound)
+    if mode=='train':
         
-        start = time.time()
+        N_LHS = int(0.05*N)
+        sampler = qmc.LatinHypercube(d=D)
+        sample = sampler.random(n=N_LHS)
+        sample_scaled = qmc.scale(sample, l_bound, u_bound)
+
+        N_uni = N-N_LHS
+        data = np.random.uniform(low=l_bound, high=u_bound, size=(N_uni, D))
+        samples = np.concatenate((sample_scaled, data), axis=0)
+    else:
+        samples = np.random.uniform(low=l_bound, high=u_bound, size=(N, D))
+
+    if save:
+        np.save(parameters_file, samples)
+        print('(Input Parameters) Saved!')
+    return samples
+
+
+
+if __name__ == '__main__':
+    model = get_model(yaml_load(yaml_string))
+    mode = args.mode
+    sampled_params = args.ordering
+    N = args.N
+    u_bound = args.u_bound
+    l_bound = args.l_bound
+    prior_params = list(model.parameterization.sampled_params())
+    sampling_dim = len(sampled_params)
+    camb_ell_max = args.camb_ell_max
+    camb_ell_min = args.camb_ell_min
+    PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
+    datavectors_file_path = PATH + args.datavectors_file
+    parameters_file  = PATH + args.parameters_file
+
+    samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    num_ranks = comm.Get_size()
+
+    print('rank',rank,'is at barrier')
+
         
-        camb_ell_range = self.camb_ell_max-self.camb_ell_min
-        camb_num_spectra = 4
-        self.CMB_DIR = self.datavectors_file + '_cmb.npy'
-        #self.BAOSN_DIR = self.datavectors_file + '_baosn.npy'
-        self.EXTRA_DIR = self.datavectors_file + '_extra.npy'
-        #self.MPS_LIN_DIR = self.datavectors_file + '_lin_mps.npy'
-        #self.MPS_NONLIN_DIR = self.datavectors_file + '_nonlin_mps.npy'
-        if rank == 0:
+    start = time.time()
+        
+    camb_ell_range = camb_ell_max-camb_ell_min
+    camb_num_spectra = 4
+    CMB_DIR = datavectors_file_path + '_cmb.npy'
+    EXTRA_DIR = datavectors_file_path + '_extra.npy'
+    if rank == 0:
             
-            total_num_dvs = len(self.samples)
+        total_num_dvs = len(samples)
 
-            param_info = self.samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
-            for i in range(1,num_ranks):#sending other ranks' data
-                comm.send(
-                    self.samples[i:total_num_dvs:num_ranks], 
-                    dest = i, 
-                    tag  = 1
-                )
+        param_info = samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
+        for i in range(1,num_ranks):#sending other ranks' data
+            comm.send(
+                samples[i:total_num_dvs:num_ranks], 
+                dest = i, 
+                tag  = 1
+            )
                 
+    else:
+            
+        param_info = comm.recv(source = 0, tag = 1)
+
+            
+    num_datavector = len(param_info)
+
+
+    total_cls = np.zeros(
+            (num_datavector, camb_ell_range, camb_num_spectra), dtype = "float32"
+        ) 
+
+
+    extra_dv = np.zeros(
+            (num_datavector, 2), dtype = "float32"
+        ) 
+
+
+    for i in range(num_datavector):
+        input_params = model.parameterization.to_input(param_info[i])
+        print(input_params)
+        input_params.pop("As", None)
+
+        try:
+            model.logposterior(input_params)
+            theory = list(model.theory.values())[1]
+            cmb = theory.get_Cl()
+            rdrag = theory.get_param("rdrag")
+            thetastar = theory.get_param("thetastar")
+                
+        except:
+            print('fail')
         else:
+
+            total_cls[i,:,0] = cmb["tt"][camb_ell_min:camb_ell_max]
+            total_cls[i,:,1] = cmb["te"][camb_ell_min:camb_ell_max]
+            total_cls[i,:,2] = cmb["ee"][camb_ell_min:camb_ell_max]
+            total_cls[i,:,3] = cmb["pp"][camb_ell_min:camb_ell_max]
+
+            extra_dv[i,0] = thetastar
+            extra_dv[i,1] = rdrag
+
+
+    if rank == 0:
+        result_cls   = np.zeros((total_num_dvs, camb_ell_range, 4), dtype="float32")
+
+        result_extra = np.zeros((total_num_dvs, 2), dtype="float32")
             
-            param_info = comm.recv(source = 0, tag = 1)
-
+        result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB
             
-        num_datavector = len(param_info)
+        result_extra[0:total_num_dvs:num_ranks]   = extra_dv         ##0: 100theta^*, 1: r_drag
 
 
-        total_cls = np.zeros(
-                (num_datavector, camb_ell_range, camb_num_spectra), dtype = "float32"
-            ) 
-
-        #SN_dv = np.zeros(
-        #        (num_datavector, len_z, 2), dtype = "float32"
-        #    ) 
-
-        extra_dv = np.zeros(
-                (num_datavector, 2), dtype = "float32"
-            ) 
-
-        #PK_lin = np.zeros(
-        #        (num_datavector, len_mps, k_n_points), dtype = "float32"
-        #    )
-
-        #PK_nonlin = np.zeros(
-        #        (num_datavector, len_mps, k_n_points), dtype = "float32"
-        #    )
-
-        for i in range(num_datavector):
-            input_params = self.model.parameterization.to_input(param_info[i])
-            input_params.pop("As", None)
-
-            try:
-                self.model.logposterior(input_params)
-                theory = list(self.model.theory.values())[1]
-                cmb = theory.get_Cl()
-                #dL = theory.get_angular_diameter_distance(z)*(1+z)
-                #H = theory.get_Hubble(z, units='km/s/Mpc')
-                rdrag = theory.get_param("rdrag")
-                thetastar = theory.get_param("thetastar")
-                #p_lin=theory.get_Pk_interpolator(nonlinear=False,extrap_kmin=kh_min,extrap_kmax=kh_max)
-                #p_nonlin=theory.get_Pk_interpolator(nonlinear=True,extrap_kmin=kh_min,extrap_kmax=kh_max)
-                
-            except:
-                print('fail')
-            else:
-
-                total_cls[i,:,0] = cmb["tt"][self.camb_ell_min:self.camb_ell_max]
-                total_cls[i,:,1] = cmb["te"][self.camb_ell_min:self.camb_ell_max]
-                total_cls[i,:,2] = cmb["ee"][self.camb_ell_min:self.camb_ell_max]
-                total_cls[i,:,3] = cmb["pp"][self.camb_ell_min:self.camb_ell_max]
+        for i in range(1,num_ranks):        
+            result_cls[i:total_num_dvs:num_ranks,:,0] = comm.recv(source = i, tag = 10)
 
 
-                #SN_dv[i,:,0] = H
-                #SN_dv[i,:,1] = dL
+            result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
 
-                extra_dv[i,0] = thetastar
-                extra_dv[i,1] = rdrag
-
-                #PK_lin[i] = p_lin
-                #PK_nonlin[i] = p_nonlin
-
-        if rank == 0:
-            result_cls   = np.zeros((total_num_dvs, camb_ell_range, 4), dtype="float32")
-            #result_sn    = np.zeros((total_num_dvs, len_z, 2), dtype="float32")
-            result_extra = np.zeros((total_num_dvs, 2), dtype="float32")
-            #result_pklin = np.zeros((total_num_dvs, len_mps, k_n_points), dtype="float32")
-            #result_pknonlin = np.zeros((total_num_dvs, len_mps, k_n_points), dtype="float32")
+        np.save(output_file_cmb, result_cls)
+        np.save(output_file_extra, result_extra)
             
-            result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB
+    else:    
+        comm.send(total_cls[:,:,0], dest = 0, tag = 10)
 
-            #result_sn[0:total_num_dvs:num_ranks]      = SN_dv            ##0: H, 1: D_l
-            
-            result_extra[0:total_num_dvs:num_ranks]   = extra_dv         ##0: 100theta^*, 1: r_drag
-
-            #result_pklin[0:total_num_dvs:num_ranks]   = PK_lin           ##P_k linear
-
-            #result_pknonlin[0:total_num_dvs:num_ranks]   = PK_nonlin     ##P_k nonlinear
-
-            for i in range(1,num_ranks):        
-                result_cls[i:total_num_dvs:num_ranks,:,0] = comm.recv(source = i, tag = 10)
-
-                #result_sn[i:total_num_dvs:num_ranks]      = comm.recv(source = i, tag = 11)
-
-                result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
-
-                #result_pklin[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 13)
-
-                #result_pknonlin[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 14)
-                
-            if save:
-                np.save(output_file_cmb, result_cls)
-                #np.save(output_file_sn, result_sn)
-                np.save(output_file_extra, result_extra)
-                #np.save(output_file_pklin, result_pklin)
-                #np.save(output_file_pknonlin, result_pknonlin)
-            
-        else:    
-            comm.send(total_cls[:,:,0], dest = 0, tag = 10)
-
-            #comm.send(SN_dv, dest = 0, tag = 11)
-
-            comm.send(extra_dv, dest = 0, tag = 12)
-
-            #comm.send(PK_lin, dest = 0, tag = 13)
-
-            #comm.send(PK_nonlin, dest = 0, tag = 14)
+        comm.send(extra_dv, dest = 0, tag = 12)
 
 
-
-        return True
-
+#mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
+#     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
+#    python datageneratorcmb.py \
+#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
+#    --camb_ell_min 2 \
+#    --camb_ell_max 5000 \
+#    --data_path './trainingdata/' \
+#    --datavectors_file 'dvfilename' \
+#    --parameters_file 'paramfilename.npy' \
+#    --N 100 \
+#    --mode 'train' \
+#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
+#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]
