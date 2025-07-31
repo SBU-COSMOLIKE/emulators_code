@@ -84,9 +84,6 @@ args, unknown = parser.parse_known_args()
 yaml_string=r"""
 
 likelihood:
-  planck_2018_highl_plik.TTTEEE_lite:
-    path: ./external_modules/
-    clik_file: plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
   dummy.desi_re.desi_re:
     path: ./external_modules/data/
 
