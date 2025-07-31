@@ -155,8 +155,6 @@ params:
     value: 'lambda logA: 1e-10*np.exp(logA)'
     latex: A_\mathrm{s}
 
-  A_planck:
-    value: 1
   mnu:
     value: 0.06
   thetastar:
