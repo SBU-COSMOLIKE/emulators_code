@@ -330,8 +330,8 @@ if __name__ == '__main__':
 
             result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
 
-        np.save(output_file_cmb, result_cls)
-        np.save(output_file_extra, result_extra)
+        np.save(CMB_DIR, result_cls)
+        np.save(EXTRA_DIR, result_extra)
             
     else:    
         comm.send(total_cls[:,:,0], dest = 0, tag = 10)
