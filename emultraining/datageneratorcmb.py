@@ -15,6 +15,10 @@ from schwimmbad import MPIPool
 
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
+def list_of_strings(arg):
+    return arg.split(',')
+def list_of_floats(arg):
+    return arg.split(',')
 
 parser.add_argument("--N",
                     dest="N",
@@ -87,7 +91,7 @@ parser.add_argument("--parameters_file",
                     nargs='?',
                     const=1,
                     default='cos_uni_input.npy')
-
+args, unknown = parser.parse_known_args()
 ####add yaml here, and make all input paratemers passing in
 yaml_string=r"""
 
@@ -153,7 +157,7 @@ params:
       dist: norm
       loc: 3.0448
       scale: 0.05
-    proposal: 0.05
+    proposal: 3
     latex: \log(10^{10} A_\mathrm{s})
     drop: true
   ns:
@@ -208,7 +212,7 @@ output: ./projects/axions/chains/EXAMPLE_EVALUATE0
 #===================================================================================================
 # datavectors
 
-def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=False):
+def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
     D = len(u_bound)
     if mode=='train':
         
@@ -235,8 +239,8 @@ if __name__ == '__main__':
     mode = args.mode
     sampled_params = args.ordering
     N = args.N
-    u_bound = args.u_bound
-    l_bound = args.l_bound
+    u_bound = [float(s) for s in args.u_bound]
+    l_bound = [float(s) for s in args.l_bound]
     prior_params = list(model.parameterization.sampled_params())
     sampling_dim = len(sampled_params)
     camb_ell_max = args.camb_ell_max
@@ -245,7 +249,6 @@ if __name__ == '__main__':
     datavectors_file_path = PATH + args.datavectors_file
     parameters_file  = PATH + args.parameters_file
 
-    samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
@@ -260,7 +263,7 @@ if __name__ == '__main__':
     CMB_DIR = datavectors_file_path + '_cmb.npy'
     EXTRA_DIR = datavectors_file_path + '_extra.npy'
     if rank == 0:
-            
+        samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
         total_num_dvs = len(samples)
 
         param_info = samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
@@ -291,7 +294,6 @@ if __name__ == '__main__':
 
     for i in range(num_datavector):
         input_params = model.parameterization.to_input(param_info[i])
-        print(input_params)
         input_params.pop("As", None)
 
         try:
@@ -330,8 +332,8 @@ if __name__ == '__main__':
 
             result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
 
-        np.save(CMB_DIR, result_cls)
-        np.save(EXTRA_DIR, result_extra)
+        np.save(output_file_cmb, result_cls)
+        np.save(output_file_extra, result_extra)
             
     else:    
         comm.send(total_cls[:,:,0], dest = 0, tag = 10)
@@ -342,7 +344,7 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratorcmb.py \
-#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
+#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
 #    --camb_ell_min 2 \
 #    --camb_ell_max 5000 \
 #    --data_path './trainingdata/' \
@@ -350,5 +352,5 @@ if __name__ == '__main__':
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
-#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]
+#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
+#    --l_bound 0,0.03,25,0.007,1.61,0.7

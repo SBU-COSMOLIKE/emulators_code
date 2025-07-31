@@ -16,6 +16,11 @@ from schwimmbad import MPIPool
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
 
+def list_of_strings(arg):
+    return arg.split(',')
+def list_of_floats(arg):
+    return arg.split(',')
+
 parser.add_argument("--N",
                     dest="N",
                     help="Number of points requested",
@@ -34,21 +39,21 @@ parser.add_argument("--mode",
 parser.add_argument("--l_bound",
                     dest="l_bound",
                     help="lower bound for parameters",
-                    type=list,
+                    type=list_of_floats,
                     nargs='?',
                     const=1,
                     default=None)
 parser.add_argument("--u_bound",
                     dest="u_bound",
                     help="upper bound for parameters",
-                    type=list,
+                    type=list_of_floats,
                     nargs='?',
                     const=1,
                     default=None)
 parser.add_argument("--ordering",
                     dest="ordering",
                     help="Ordering of parameters",
-                    type=list,
+                    type=list_of_strings,
                     nargs='?',
                     const=1,
                     default=None)
@@ -73,14 +78,17 @@ parser.add_argument("--parameters_file",
                     nargs='?',
                     const=1,
                     default='cos_uni_input.npy')
+args, unknown = parser.parse_known_args()
 
 ####add yaml here, and make all input paratemers passing in
 yaml_string=r"""
 
 likelihood:
+  planck_2018_highl_plik.TTTEEE_lite:
+    path: ./external_modules/
+    clik_file: plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
   dummy.desi_re.desi_re:
     path: ./external_modules/data/
-
 
 params:
   
@@ -133,7 +141,7 @@ params:
       dist: norm
       loc: 3.0448
       scale: 0.05
-    proposal: 0.05
+    proposal: 3.04
     latex: \log(10^{10} A_\mathrm{s})
     drop: true
   ns:
@@ -149,11 +157,11 @@ params:
   As:
     value: 'lambda logA: 1e-10*np.exp(logA)'
     latex: A_\mathrm{s}
-  mnu:
-    value: 0.06
 
   A_planck:
     value: 1
+  mnu:
+    value: 0.06
   thetastar:
     derived: true
     latex: \Theta_\star
@@ -166,12 +174,11 @@ theory:
     path: ./external_modules/code/CAMB
     extra_args:
       #dark_energy_model: ppf
-      lmax: 1000
+      lmax: 3000
 
 
 
 
-output: ./projects/axions/chains/EXAMPLE_EVALUATE0
 
 """
 
@@ -182,8 +189,9 @@ output: ./projects/axions/chains/EXAMPLE_EVALUATE0
 #===================================================================================================
 # datavectors
 
-def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=False):
+def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
     D = len(u_bound)
+
     if mode=='train':
         
         N_LHS = int(0.05*N)
@@ -201,23 +209,20 @@ def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=False):
         np.save(parameters_file, samples)
         print('(Input Parameters) Saved!')
     return samples
-
-
+mode = args.mode
+sampled_params = args.ordering
+N = args.N
+u_bound = [float(s) for s in args.u_bound]
+l_bound = [float(s) for s in args.l_bound]
+PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
+parameters_file  = PATH + args.parameters_file
 
 if __name__ == '__main__':
     model = get_model(yaml_load(yaml_string))
-    mode = args.mode
-    sampled_params = args.ordering
-    N = args.N
-    u_bound = args.u_bound
-    l_bound = args.l_bound
+    
     prior_params = list(model.parameterization.sampled_params())
     sampling_dim = len(sampled_params)
-    PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
     datavectors_file_path = PATH + args.datavectors_file
-    parameters_file  = PATH + args.parameters_file
-
-    samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
@@ -234,7 +239,7 @@ if __name__ == '__main__':
     num_output = 2
     SN_DIR = datavectors_file_path + '_baosn.npy'
     if rank == 0:
-            
+        samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
         total_num_dvs = len(samples)
 
         param_info = samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
@@ -259,9 +264,11 @@ if __name__ == '__main__':
 
 
     for i in range(num_datavector):
+        #model.parameterization.sampled_params()["As"] = 0
         input_params = model.parameterization.to_input(param_info[i])
-        print(input_params)
+        
         input_params.pop("As", None)
+        #print(model.logposterior(input_params))
 
         try:
             model.logposterior(input_params)
@@ -301,11 +308,11 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratorbaosn.py \
-#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
+#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
-#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]
+#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
+#    --l_bound 0,0.03,25,0.007,1.61,0.7

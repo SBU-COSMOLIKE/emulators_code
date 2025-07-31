@@ -36,8 +36,6 @@ class MyPkLikelihood(Likelihood):
         k = np.logspace(-4, np.log10(self.kmax), 2000)
         pk_lin = self.linear_pk.P(self.z_eval, k)
         pk_nonlin = self.nonlinear_pk.P(self.z_eval, k)
-        print(len(pk_lin))
-        print(len(pk_nonlin[0]))
 
 
 

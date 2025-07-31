@@ -16,6 +16,10 @@ from schwimmbad import MPIPool
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
 
+def list_of_strings(arg):
+    return arg.split(',')
+def list_of_floats(arg):
+    return arg.split(',')
 parser.add_argument("--N",
                     dest="N",
                     help="Number of points requested",
@@ -34,21 +38,21 @@ parser.add_argument("--mode",
 parser.add_argument("--l_bound",
                     dest="l_bound",
                     help="lower bound for parameters",
-                    type=list,
+                    type=list_of_floats,
                     nargs='?',
                     const=1,
                     default=None)
 parser.add_argument("--u_bound",
                     dest="u_bound",
                     help="upper bound for parameters",
-                    type=list,
+                    type=list_of_floats,
                     nargs='?',
                     const=1,
                     default=None)
 parser.add_argument("--ordering",
                     dest="ordering",
                     help="Ordering of parameters",
-                    type=list,
+                    type=list_of_strings,
                     nargs='?',
                     const=1,
                     default=None)
@@ -73,6 +77,7 @@ parser.add_argument("--parameters_file",
                     nargs='?',
                     const=1,
                     default='cos_uni_input.npy')
+args, unknown = parser.parse_known_args()
 
 ####add yaml here, and make all input paratemers passing in
 yaml_string=r"""
@@ -131,7 +136,7 @@ params:
       dist: norm
       loc: 3.0448
       scale: 0.05
-    proposal: 0.05
+    proposal: 3
     latex: \log(10^{10} A_\mathrm{s})
     drop: true
   ns:
@@ -150,8 +155,7 @@ params:
   mnu:
     value: 0.06
 
-  A_planck:
-    value: 1
+
   thetastar:
     derived: true
     latex: \Theta_\star
@@ -170,7 +174,7 @@ theory:
       lens_potential_accuracy: 8
       lens_k_eta_reference: 18000.0
       nonlinear: NonLinear_both
-      recombination_model: CosmoRec
+      #recombination_model: CosmoRec
       Accuracy.AccurateBB: True
 
 
@@ -187,7 +191,7 @@ output: ./projects/axions/chains/EXAMPLE_EVALUATE0
 #===================================================================================================
 # datavectors
 
-def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=False):
+def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
     D = len(u_bound)
     if mode=='train':
         
@@ -214,15 +218,14 @@ if __name__ == '__main__':
     mode = args.mode
     sampled_params = args.ordering
     N = args.N
-    u_bound = args.u_bound
-    l_bound = args.l_bound
+    u_bound = [float(s) for s in args.u_bound]
+    l_bound = [float(s) for s in args.l_bound]
     prior_params = list(model.parameterization.sampled_params())
     sampling_dim = len(sampled_params)
     PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
     datavectors_file_path = PATH + args.datavectors_file
     parameters_file  = PATH + args.parameters_file
 
-    samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
@@ -242,7 +245,7 @@ if __name__ == '__main__':
     PK_LIN_DIR = datavectors_file_path + '_pklin.npy'
     PK_NONLIN_DIR = datavectors_file_path + '_pknonlin.npy'
     if rank == 0:
-            
+        samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
         total_num_dvs = len(samples)
 
         param_info = samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
@@ -271,7 +274,6 @@ if __name__ == '__main__':
 
     for i in range(num_datavector):
         input_params = model.parameterization.to_input(param_info[i])
-        print(input_params)
         input_params.pop("As", None)
 
         try:
@@ -314,11 +316,11 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratormps.py \
-#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
+#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
-#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]
+#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
+#    --l_bound 0,0.03,25,0.007,1.61,0.7
