@@ -120,36 +120,15 @@ params:
     proposal: 0.001
     latex: H_0
   tau:
-    prior:
-      min: 0.01
-      max: 0.2
-    ref:
-      dist: norm
-      loc: 0.055
-      scale: 0.006
-    proposal: 0.003
+    value: 0.06
     latex: \tau_\mathrm{reio}
 
   logA:
-    prior:
-      min: 1.61
-      max: 3.91
-    ref:
-      dist: norm
-      loc: 3.0448
-      scale: 0.05
-    proposal: 3.04
+    value: 3.04
     latex: \log(10^{10} A_\mathrm{s})
     drop: true
   ns:
-    prior:
-      min: 0.6
-      max: 1.3
-    ref:
-      dist: norm
-      loc: 0.96605
-      scale: 0.005
-    proposal: 0.005
+    value: 0.95
     latex: n_\mathrm{s}
   As:
     value: 'lambda logA: 1e-10*np.exp(logA)'
@@ -169,7 +148,7 @@ theory:
     path: ./external_modules/code/CAMB
     extra_args:
       #dark_energy_model: ppf
-      lmax: 3000
+      lmax: 1000
 
 
 
@@ -262,14 +241,13 @@ if __name__ == '__main__':
         #model.parameterization.sampled_params()["As"] = 0
         input_params = model.parameterization.to_input(param_info[i])
         
-        input_params.pop("As", None)
-        #print(model.logposterior(input_params))
-
+        
         try:
             model.logposterior(input_params)
             theory = list(model.theory.values())[1]
             H = theory.get_Hubble(z)
             Dl = theory.get_angular_diameter_distance(z)*(1+z)**2
+
                 
         except:
             print('fail')
@@ -303,11 +281,11 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratorbaosn.py \
-#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
+#    --ordering 'omegabh2','omegach2','H0' \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
-#    --l_bound 0,0.03,25,0.007,1.61,0.7
+#    --u_bound 0.038,0.235,114\
+#    --l_bound 0,0.03,25
