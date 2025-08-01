@@ -12,8 +12,48 @@ import copy
 import functools, iminuit, copy, argparse, random, time 
 import emcee, itertools
 from schwimmbad import MPIPool
+from cobaya.likelihood import Likelihood
+
+class MyPkLikelihood(Likelihood):
+
+    def initialize(self):
+        self.kmax = 100.0
+        self.linear_pk = None
+        self.nonlinear_pk = None
+        z1_mps = np.linspace(0,2,100,endpoint=False)
+        z2_mps = np.linspace(2,10,10,endpoint=False)
+        z3_mps = np.linspace(10,50,12)
+        self.z_eval = np.concatenate((z1_mps,z2_mps,z3_mps),axis=0)
+    def get_requirements(self):
+        return {"omegabh2": None, "Pk_interpolator": {
+        "z":self.z_eval,
+        "k_max": 200,
+        "nonlinear": (True,False),
+        "vars_pairs": ([("delta_tot", "delta_tot")])
+        }, "Cl": { # DONT REMOVE THIS - SOME WEIRD BEHAVIOR IN CAMB WITHOUT WANTS_CL
+        'tt': 0
+        },"omegach2":None, "H0": None, "ns": None, "As": None, "tau": None}
+
+    def logp(self, **params):
+        # Get linear P(k, z)
+
+        self.linear_pk = self.provider.get_Pk_interpolator(
+                ("delta_tot", "delta_tot"), nonlinear=False, extrap_kmax = self.kmax)
+
+        # Get non-linear P(k, z)
+        self.nonlinear_pk = self.provider.get_Pk_interpolator(
+                ("delta_tot", "delta_tot"), nonlinear=True, extrap_kmax = self.kmax
+            )
+
+        # Choose k range and evaluate both
+        k = np.logspace(-4, np.log10(self.kmax), 2000)
+        pk_lin = self.linear_pk.P(self.z_eval, k)
+        pk_nonlin = self.nonlinear_pk.P(self.z_eval, k)
 
 
+
+        # Return dummy log-likelihood
+        return -0.5 
 parser = argparse.ArgumentParser(prog='cos_uniform')
 
 def list_of_strings(arg):
@@ -83,7 +123,8 @@ args, unknown = parser.parse_known_args()
 yaml_string=r"""
 
 likelihood:
-    dummy.Pk.Pklike.MyPkLikelihood: null
+  dummy:
+    class: MyPkLikelihood
 
 params:
   
@@ -174,7 +215,7 @@ theory:
       lens_potential_accuracy: 8
       lens_k_eta_reference: 18000.0
       nonlinear: NonLinear_both
-      #recombination_model: CosmoRec
+      recombination_model: CosmoRec
       Accuracy.AccurateBB: True
 
 
@@ -214,7 +255,11 @@ def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
 
 
 if __name__ == '__main__':
-    model = get_model(yaml_load(yaml_string))
+
+    f = yaml_load(yaml_string)
+    sys.modules["MyPkLikelihood"] = sys.modules[__name__]
+
+    model = get_model(f)
     mode = args.mode
     sampled_params = args.ordering
     N = args.N
@@ -274,6 +319,7 @@ if __name__ == '__main__':
 
     for i in range(num_datavector):
         input_params = model.parameterization.to_input(param_info[i])
+        print(input_params)
         input_params.pop("As", None)
 
         try:
@@ -316,11 +362,11 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratormps.py \
-#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
+#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
-#    --l_bound 0,0.03,25,0.007,1.61,0.7
+#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
+#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]

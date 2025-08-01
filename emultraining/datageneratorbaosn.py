@@ -11,10 +11,32 @@ from scipy.stats import qmc
 import copy
 import functools, iminuit, copy, argparse, random, time 
 import emcee, itertools
+from cobaya.likelihood import Likelihood
 from schwimmbad import MPIPool
 
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
+
+
+class SimpleBAODVLikelihood(Likelihood):
+    # Example data can also be passed via YAML or hardcoded here
+    def initialize(self):
+        # Define data inside the class (or pass from outside if needed)
+        z1=np.linspace(0,3,600, endpoint=False)
+        z2=np.linspace(3,1200,200)
+        self.z_data = np.concatenate((z1,z2),axis=0)  # example redshifts
+
+    def get_requirements(self):
+        # Tell Cobaya which theory quantities you need at these redshifts
+        return {
+            "angular_diameter_distance": {"z": self.z_data},
+            "Hubble": {"z": self.z_data}
+            
+        }
+
+    def logp(self, **params_values):
+        # Get required theory quantities
+        return -0.5
 
 def list_of_strings(arg):
     return arg.split(',')
@@ -84,8 +106,8 @@ args, unknown = parser.parse_known_args()
 yaml_string=r"""
 
 likelihood:
-  dummy.desi_re.desi_re:
-    path: ./external_modules/data/
+  dummy:
+    class: SimpleBAODVLikelihood
 
 params:
   
@@ -192,7 +214,9 @@ PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
 parameters_file  = PATH + args.parameters_file
 
 if __name__ == '__main__':
-    model = get_model(yaml_load(yaml_string))
+    f = yaml_load(yaml_string)
+    sys.modules["SimpleBAODVLikelihood"] = sys.modules[__name__]
+    model = get_model(f)
     
     prior_params = list(model.parameterization.sampled_params())
     sampling_dim = len(sampled_params)
@@ -206,9 +230,8 @@ if __name__ == '__main__':
         
     start = time.time()
         
-    z1=np.linspace(0,3,600, endpoint=False)
-    z2=np.linspace(3,1200,200)
-    z = np.concatenate((z1,z2),axis=0)
+    
+    z = model.likelihood['dummy'].z_data
     len_z = len(z)
     num_output = 2
     SN_DIR = datavectors_file_path + '_baosn.npy'
