@@ -38,11 +38,6 @@ class SimpleBAODVLikelihood(Likelihood):
         # Get required theory quantities
         return -0.5
 
-def list_of_strings(arg):
-    return arg.split(',')
-def list_of_floats(arg):
-    return arg.split(',')
-
 parser.add_argument("--N",
                     dest="N",
                     help="Number of points requested",
@@ -58,27 +53,6 @@ parser.add_argument("--mode",
                     nargs='?',
                     const=1,
                     default='train')
-parser.add_argument("--l_bound",
-                    dest="l_bound",
-                    help="lower bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--u_bound",
-                    dest="u_bound",
-                    help="upper bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--ordering",
-                    dest="ordering",
-                    help="Ordering of parameters",
-                    type=list_of_strings,
-                    nargs='?',
-                    const=1,
-                    default=None)
 parser.add_argument("--data_path",
                     dest="data_path",
                     help="Directory for saving the data files",
@@ -206,10 +180,7 @@ def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
         print('(Input Parameters) Saved!')
     return samples
 mode = args.mode
-sampled_params = args.ordering
 N = args.N
-u_bound = [float(s) for s in args.u_bound]
-l_bound = [float(s) for s in args.l_bound]
 PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
 parameters_file  = PATH + args.parameters_file
 
@@ -219,22 +190,20 @@ if __name__ == '__main__':
     model = get_model(f)
     
     prior_params = list(model.parameterization.sampled_params())
-    sampling_dim = len(sampled_params)
+    sampling_dim = len(prior_params)
     datavectors_file_path = PATH + args.datavectors_file
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
 
     print('rank',rank,'is at barrier')
-
-        
-    start = time.time()
-        
-    
+           
     z = model.likelihood['dummy'].z_data
     len_z = len(z)
     num_output = 2
     SN_DIR = datavectors_file_path + '_baosn.npy'
+    u_bound = model.prior.bounds()[:,1]
+    l_bound = model.prior.bounds()[:,0]
     if rank == 0:
         samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
         total_num_dvs = len(samples)
@@ -254,44 +223,31 @@ if __name__ == '__main__':
             
     num_datavector = len(param_info)
 
-
     BAOSN = np.zeros(
             (num_datavector, len_z, num_output), dtype = "float32"
         ) 
 
-
     for i in range(num_datavector):
-        #model.parameterization.sampled_params()["As"] = 0
-        input_params = model.parameterization.to_input(param_info[i])
-        
-        
+        input_params = model.parameterization.to_input(param_info[i])  
         try:
-            model.logposterior(input_params)
+            model.loglike(input_params)
             theory = list(model.theory.values())[1]
             H = theory.get_Hubble(z)
             Dl = theory.get_angular_diameter_distance(z)*(1+z)**2
-
                 
         except:
             print('fail')
         else:
-
             BAOSN[i,:,0] = H
             BAOSN[i,:,1] = Dl
             
 
     if rank == 0:
         result_baosn   = np.zeros((total_num_dvs, len_z, num_output), dtype="float32")
-
-            
         result_baosn[0:total_num_dvs:num_ranks] = BAOSN
-            
-
-
 
         for i in range(1,num_ranks):        
             result_baosn[i:total_num_dvs:num_ranks] = comm.recv(source = i, tag = 10)
-
 
         np.save(SN_DIR, result_baosn)
             
@@ -304,11 +260,9 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratorbaosn.py \
-#    --ordering 'omegabh2','omegach2','H0' \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound 0.038,0.235,114\
-#    --l_bound 0,0.03,25
+

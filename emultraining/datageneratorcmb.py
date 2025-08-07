@@ -15,10 +15,6 @@ from schwimmbad import MPIPool
 
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
-def list_of_strings(arg):
-    return arg.split(',')
-def list_of_floats(arg):
-    return arg.split(',')
 
 parser.add_argument("--N",
                     dest="N",
@@ -49,27 +45,6 @@ parser.add_argument("--mode",
                     nargs='?',
                     const=1,
                     default='train')
-parser.add_argument("--l_bound",
-                    dest="l_bound",
-                    help="lower bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--u_bound",
-                    dest="u_bound",
-                    help="upper bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--ordering",
-                    dest="ordering",
-                    help="Ordering of parameters",
-                    type=list_of_strings,
-                    nargs='?',
-                    const=1,
-                    default=None)
 parser.add_argument("--data_path",
                     dest="data_path",
                     help="Directory for saving the data files",
@@ -237,12 +212,11 @@ def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
 if __name__ == '__main__':
     model = get_model(yaml_load(yaml_string))
     mode = args.mode
-    sampled_params = args.ordering
+
     N = args.N
-    u_bound = [float(s) for s in args.u_bound]
-    l_bound = [float(s) for s in args.l_bound]
+
     prior_params = list(model.parameterization.sampled_params())
-    sampling_dim = len(sampled_params)
+    sampling_dim = len(prior_params)
     camb_ell_max = args.camb_ell_max
     camb_ell_min = args.camb_ell_min
     PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
@@ -254,14 +228,13 @@ if __name__ == '__main__':
     num_ranks = comm.Get_size()
 
     print('rank',rank,'is at barrier')
-
-        
-    start = time.time()
         
     camb_ell_range = camb_ell_max-camb_ell_min
     camb_num_spectra = 4
     CMB_DIR = datavectors_file_path + '_cmb.npy'
     EXTRA_DIR = datavectors_file_path + '_extra.npy'
+    u_bound = model.prior.bounds()[:,1]
+    l_bound = model.prior.bounds()[:,0]
     if rank == 0:
         samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
         total_num_dvs = len(samples)
@@ -278,26 +251,19 @@ if __name__ == '__main__':
             
         param_info = comm.recv(source = 0, tag = 1)
 
-            
     num_datavector = len(param_info)
-
-
     total_cls = np.zeros(
             (num_datavector, camb_ell_range, camb_num_spectra), dtype = "float32"
         ) 
-
-
     extra_dv = np.zeros(
             (num_datavector, 2), dtype = "float32"
         ) 
-
-
     for i in range(num_datavector):
         input_params = model.parameterization.to_input(param_info[i])
         input_params.pop("As", None)
 
         try:
-            model.logposterior(input_params)
+            model.loglike(input_params)
             theory = list(model.theory.values())[1]
             cmb = theory.get_Cl()
             rdrag = theory.get_param("rdrag")
@@ -306,7 +272,6 @@ if __name__ == '__main__':
         except:
             print('fail')
         else:
-
             total_cls[i,:,0] = cmb["tt"][camb_ell_min:camb_ell_max]
             total_cls[i,:,1] = cmb["te"][camb_ell_min:camb_ell_max]
             total_cls[i,:,2] = cmb["ee"][camb_ell_min:camb_ell_max]
@@ -315,21 +280,14 @@ if __name__ == '__main__':
             extra_dv[i,0] = thetastar
             extra_dv[i,1] = rdrag
 
-
     if rank == 0:
         result_cls   = np.zeros((total_num_dvs, camb_ell_range, 4), dtype="float32")
-
-        result_extra = np.zeros((total_num_dvs, 2), dtype="float32")
-            
-        result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB
-            
-        result_extra[0:total_num_dvs:num_ranks]   = extra_dv         ##0: 100theta^*, 1: r_drag
-
+        result_extra = np.zeros((total_num_dvs, 2), dtype="float32") 
+        result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB       
+        result_extra[0:total_num_dvs:num_ranks]   = extra_dv ##0: 100theta^*, 1: r_drag
 
         for i in range(1,num_ranks):        
             result_cls[i:total_num_dvs:num_ranks,:,0] = comm.recv(source = i, tag = 10)
-
-
             result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
 
         np.save(output_file_cmb, result_cls)
@@ -337,14 +295,12 @@ if __name__ == '__main__':
             
     else:    
         comm.send(total_cls[:,:,0], dest = 0, tag = 10)
-
         comm.send(extra_dv, dest = 0, tag = 12)
 
 
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratorcmb.py \
-#    --ordering 'omegabh2','omegach2','H0','tau','logA','ns' \
 #    --camb_ell_min 2 \
 #    --camb_ell_max 5000 \
 #    --data_path './trainingdata/' \
@@ -352,5 +308,3 @@ if __name__ == '__main__':
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound 0.038,0.235,114,0.15,3.6,1.3 \
-#    --l_bound 0,0.03,25,0.007,1.61,0.7

@@ -56,10 +56,7 @@ class MyPkLikelihood(Likelihood):
         return -0.5 
 parser = argparse.ArgumentParser(prog='cos_uniform')
 
-def list_of_strings(arg):
-    return arg.split(',')
-def list_of_floats(arg):
-    return arg.split(',')
+
 parser.add_argument("--N",
                     dest="N",
                     help="Number of points requested",
@@ -75,27 +72,7 @@ parser.add_argument("--mode",
                     nargs='?',
                     const=1,
                     default='train')
-parser.add_argument("--l_bound",
-                    dest="l_bound",
-                    help="lower bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--u_bound",
-                    dest="u_bound",
-                    help="upper bound for parameters",
-                    type=list_of_floats,
-                    nargs='?',
-                    const=1,
-                    default=None)
-parser.add_argument("--ordering",
-                    dest="ordering",
-                    help="Ordering of parameters",
-                    type=list_of_strings,
-                    nargs='?',
-                    const=1,
-                    default=None)
+
 parser.add_argument("--data_path",
                     dest="data_path",
                     help="Directory for saving the data files",
@@ -261,24 +238,23 @@ if __name__ == '__main__':
 
     model = get_model(f)
     mode = args.mode
-    sampled_params = args.ordering
     N = args.N
-    u_bound = [float(s) for s in args.u_bound]
-    l_bound = [float(s) for s in args.l_bound]
+
     prior_params = list(model.parameterization.sampled_params())
-    sampling_dim = len(sampled_params)
+    sampling_dim = len(prior_params)
+
     PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
     datavectors_file_path = PATH + args.datavectors_file
     parameters_file  = PATH + args.parameters_file
+
+    u_bound = model.prior.bounds()[:,1]
+    l_bound = model.prior.bounds()[:,0]
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
 
     print('rank',rank,'is at barrier')
-
-        
-    start = time.time()
         
     z1_mps = np.linspace(0,2,100,endpoint=False)
     z2_mps = np.linspace(2,10,10,endpoint=False)
@@ -316,14 +292,13 @@ if __name__ == '__main__':
             (num_datavector, len_z, len_k), dtype = "float32"
         ) 
 
-
     for i in range(num_datavector):
         input_params = model.parameterization.to_input(param_info[i])
         print(input_params)
         input_params.pop("As", None)
 
         try:
-            model.logposterior(input_params)
+            model.loglike(input_params)
             theory = list(model.theory.values())[1]
             lin_pk = theory.get_Pk_interpolator(
                 ("delta_tot", "delta_tot"), nonlinear=False, extrap_kmax = 200)
@@ -340,7 +315,6 @@ if __name__ == '__main__':
     if rank == 0:
         result_pklin   = np.zeros((total_num_dvs, len_z, len_k), dtype="float32")
         result_pknonlin   = np.zeros((total_num_dvs, len_z, len_k), dtype="float32")
-
             
         result_pklin[0:total_num_dvs:num_ranks] = PKLIN
         result_pknonlin[0:total_num_dvs:num_ranks] = PKNONLIN
@@ -362,11 +336,8 @@ if __name__ == '__main__':
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
 #    python datageneratormps.py \
-#    --ordering ['omegabh2', 'omegach2', 'H0', 'tau', 'logA','ns'] \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
-#    --u_bound [0.038, 0.235, 114, 0.15, 3.6, 1.3] \
-#    --l_bound [0,     0.03,  25,  0.007, 1.61, 0.7]

@@ -164,6 +164,7 @@ class emulbaosn(Theory):
                                                  fill_value="extrapolate")
         # SN ------------------------------------------------------------
         i = 0
+
         func  = interpolate.interp1d(self.z[1], 2.99792458e5/H,
                                      kind='cubic',
                                      assume_sorted=True,
