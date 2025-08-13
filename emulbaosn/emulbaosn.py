@@ -164,6 +164,7 @@ class emulbaosn(Theory):
                                                  fill_value="extrapolate")
         # SN ------------------------------------------------------------
         i = 0
+
         func  = interpolate.interp1d(self.z[1], 2.99792458e5/H,
                                      kind='cubic',
                                      assume_sorted=True,
@@ -175,10 +176,7 @@ class emulbaosn(Theory):
                                                   kind='cubic',
                                                   assume_sorted=True,
                                                   fill_value="extrapolate")
-        #state["zdl"] = self.z[0]
-        #state["dl"]  = state["dl_interp"](self.z[0])
-        #state["zda"] = self.z[0]
-        #state["da"]  = state["da_interp"](self.z[0])
+
 
     def get_angular_diameter_distance(self, z):
         DA = self.current_state["da_interp"](z)

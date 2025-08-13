@@ -11,10 +11,32 @@ from scipy.stats import qmc
 import copy
 import functools, iminuit, copy, argparse, random, time 
 import emcee, itertools
+from cobaya.likelihood import Likelihood
 from schwimmbad import MPIPool
 
 
 parser = argparse.ArgumentParser(prog='cos_uniform')
+
+
+class SimpleBAODVLikelihood(Likelihood):
+    # Example data can also be passed via YAML or hardcoded here
+    def initialize(self):
+        # Define data inside the class (or pass from outside if needed)
+        z1=np.linspace(0,3,600, endpoint=False)
+        z2=np.linspace(3,1200,200)
+        self.z_data = np.concatenate((z1,z2),axis=0)  # example redshifts
+
+    def get_requirements(self):
+        # Tell Cobaya which theory quantities you need at these redshifts
+        return {
+            "angular_diameter_distance": {"z": self.z_data},
+            "Hubble": {"z": self.z_data}
+            
+        }
+
+    def logp(self, **params_values):
+        # Get required theory quantities
+        return -0.5
 
 parser.add_argument("--N",
                     dest="N",
@@ -23,20 +45,6 @@ parser.add_argument("--N",
                     nargs='?',
                     const=1,
                     default=100)
-parser.add_argument("--camb_ell_min",
-                    dest="camb_ell_min",
-                    help="minimum of ell output",
-                    type=int,
-                    nargs='?',
-                    const=1,
-                    default=2)
-parser.add_argument("--camb_ell_max",
-                    dest="camb_ell_max",
-                    help="maximum of ell output",
-                    type=int,
-                    nargs='?',
-                    const=1,
-                    default=5000)
 
 parser.add_argument("--mode",
                     dest="mode",
@@ -67,19 +75,13 @@ parser.add_argument("--parameters_file",
                     const=1,
                     default='cos_uni_input.npy')
 args, unknown = parser.parse_known_args()
+
 ####add yaml here, and make all input paratemers passing in
 yaml_string=r"""
 
 likelihood:
-  planck_2018_highl_plik.TTTEEE_lite:
-    path: ./external_modules/
-    clik_file: plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
-
-  planck_2018_lensing.clik:
-    path: ./external_modules/
-    #clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_agr2.clik_lensing
-    clik_file: plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing
-
+  dummy:
+    class: SimpleBAODVLikelihood
 
 params:
   
@@ -114,45 +116,22 @@ params:
     proposal: 0.001
     latex: H_0
   tau:
-    prior:
-      min: 0.01
-      max: 0.2
-    ref:
-      dist: norm
-      loc: 0.055
-      scale: 0.006
-    proposal: 0.003
+    value: 0.06
     latex: \tau_\mathrm{reio}
 
   logA:
-    prior:
-      min: 1.61
-      max: 3.91
-    ref:
-      dist: norm
-      loc: 3.0448
-      scale: 0.05
-    proposal: 3
+    value: 3.04
     latex: \log(10^{10} A_\mathrm{s})
     drop: true
   ns:
-    prior:
-      min: 0.6
-      max: 1.3
-    ref:
-      dist: norm
-      loc: 0.96605
-      scale: 0.005
-    proposal: 0.005
+    value: 0.95
     latex: n_\mathrm{s}
   As:
     value: 'lambda logA: 1e-10*np.exp(logA)'
     latex: A_\mathrm{s}
+
   mnu:
     value: 0.06
-
-  A_planck:
-    value: 1
   thetastar:
     derived: true
     latex: \Theta_\star
@@ -164,19 +143,12 @@ theory:
   camb:
     path: ./external_modules/code/CAMB
     extra_args:
-      halofit_version: mead2020
       #dark_energy_model: ppf
-      lmax: 7000
-      AccuracyBoost: 1.5
-      lens_potential_accuracy: 8
-      lens_k_eta_reference: 18000.0
-      nonlinear: NonLinear_both
-      recombination_model: CosmoRec
-      Accuracy.AccurateBB: True
+      lmax: 1000
 
 
 
-output: ./projects/axions/chains/EXAMPLE_EVALUATE0
+
 
 """
 
@@ -189,6 +161,7 @@ output: ./projects/axions/chains/EXAMPLE_EVALUATE0
 
 def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
     D = len(u_bound)
+
     if mode=='train':
         
         N_LHS = int(0.05*N)
@@ -206,33 +179,29 @@ def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
         np.save(parameters_file, samples)
         print('(Input Parameters) Saved!')
     return samples
-
-
+mode = args.mode
+N = args.N
+PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
+parameters_file  = PATH + args.parameters_file
 
 if __name__ == '__main__':
-    model = get_model(yaml_load(yaml_string))
-    mode = args.mode
-
-    N = args.N
-
+    f = yaml_load(yaml_string)
+    sys.modules["SimpleBAODVLikelihood"] = sys.modules[__name__]
+    model = get_model(f)
+    
     prior_params = list(model.parameterization.sampled_params())
     sampling_dim = len(prior_params)
-    camb_ell_max = args.camb_ell_max
-    camb_ell_min = args.camb_ell_min
-    PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
     datavectors_file_path = PATH + args.datavectors_file
-    parameters_file  = PATH + args.parameters_file
-
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     num_ranks = comm.Get_size()
 
     print('rank',rank,'is at barrier')
-        
-    camb_ell_range = camb_ell_max-camb_ell_min
-    camb_num_spectra = 4
-    CMB_DIR = datavectors_file_path + '_cmb.npy'
-    EXTRA_DIR = datavectors_file_path + '_extra.npy'
+           
+    z = model.likelihood['dummy'].z_data
+    len_z = len(z)
+    num_output = 2
+    SN_DIR = datavectors_file_path + '_baosn.npy'
     u_bound = model.prior.bounds()[:,1]
     l_bound = model.prior.bounds()[:,0]
     if rank == 0:
@@ -251,60 +220,49 @@ if __name__ == '__main__':
             
         param_info = comm.recv(source = 0, tag = 1)
 
+            
     num_datavector = len(param_info)
-    total_cls = np.zeros(
-            (num_datavector, camb_ell_range, camb_num_spectra), dtype = "float32"
-        ) 
-    extra_dv = np.zeros(
-            (num_datavector, 2), dtype = "float32"
-        ) 
-    for i in range(num_datavector):
-        input_params = model.parameterization.to_input(param_info[i])
-        input_params.pop("As", None)
 
+    BAOSN = np.zeros(
+            (num_datavector, len_z, num_output), dtype = "float32"
+        ) 
+
+    for i in range(num_datavector):
+        input_params = model.parameterization.to_input(param_info[i])  
         try:
             model.loglike(input_params)
             theory = list(model.theory.values())[1]
-            cmb = theory.get_Cl()
-            rdrag = theory.get_param("rdrag")
-            thetastar = theory.get_param("thetastar")
+            H = theory.get_Hubble(z)
+            Dl = theory.get_angular_diameter_distance(z)*(1+z)**2
                 
         except:
             print('fail')
         else:
-            total_cls[i,:,0] = cmb["tt"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,1] = cmb["te"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,2] = cmb["ee"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,3] = cmb["pp"][camb_ell_min:camb_ell_max]
-
-            extra_dv[i,0] = thetastar
-            extra_dv[i,1] = rdrag
+            BAOSN[i,:,0] = H
+            BAOSN[i,:,1] = Dl
+            
 
     if rank == 0:
-        result_cls   = np.zeros((total_num_dvs, camb_ell_range, 4), dtype="float32")
-        result_extra = np.zeros((total_num_dvs, 2), dtype="float32") 
-        result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB       
-        result_extra[0:total_num_dvs:num_ranks]   = extra_dv ##0: 100theta^*, 1: r_drag
+        result_baosn   = np.zeros((total_num_dvs, len_z, num_output), dtype="float32")
+        result_baosn[0:total_num_dvs:num_ranks] = BAOSN
 
         for i in range(1,num_ranks):        
-            result_cls[i:total_num_dvs:num_ranks,:,0] = comm.recv(source = i, tag = 10)
-            result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
+            result_baosn[i:total_num_dvs:num_ranks] = comm.recv(source = i, tag = 10)
 
-        np.save(output_file_cmb, result_cls)
-        np.save(output_file_extra, result_extra)
+        np.save(SN_DIR, result_baosn)
             
     else:    
-        comm.send(total_cls[:,:,0], dest = 0, tag = 10)
-        comm.send(extra_dv, dest = 0, tag = 12)
+        comm.send(BAOSN, dest = 0, tag = 10)
+
+
 
 
 #mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
 #     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
-#    python datageneratorcmb.py \
-#    --camb_ell_min 2 \
-#    --camb_ell_max 5000 \
+#    python datageneratorbaosn.py \
 #    --data_path './trainingdata/' \
 #    --datavectors_file 'dvfilename' \
 #    --parameters_file 'paramfilename.npy' \
 #    --N 100 \
 #    --mode 'train' \
+
