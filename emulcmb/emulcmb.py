@@ -148,7 +148,7 @@ class emulcmb(Theory):
             X = np.array([par[key] for key in params])
             logAs  = X[params.index('logA')]
             tau    = X[params.index('tau')]
-            norm   = np.exp(logAs)/np.exp(2*tau)
+            norm   = np.exp(logAs)*np.exp(-2.0*tau)
             lmax   = self.extra_args.get('extrapar')[i]['ellmax']
             state[self.cmb[i]][2:lmax] = self.predict_data_vector(X,i)*norm
         state["et"] = state["te"]

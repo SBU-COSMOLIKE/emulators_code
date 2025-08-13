@@ -52,7 +52,7 @@ class emul_cosmic_shear(Theory):
             self.info[i] = self.extra_args.get('extra')[i]
             # load extra stuff for
             if 'h5' in self.info[i]:
-                with h5.File(self.info[i], 'r') as f:
+                with h5.File(self.info[i], 'r', locking=False) as f:
                     self.X_mean[i] = torch.Tensor(f['sample_mean'][:]).to(self.device)
                     self.X_std[i] = torch.Tensor(f['sample_std'][:]).to(self.device)
                     self.Y_mean[i] = torch.Tensor(f['dv_fid'][:]).to(self.device)
