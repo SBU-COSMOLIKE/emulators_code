@@ -36,7 +36,7 @@ parser.add_argument("--Nlayer",
                     type=int,
                     nargs='?',
                     const=1,
-                    default=5120)
+                    default=4)
 
 parser.add_argument("--Path",
                     dest="PATH",
@@ -244,3 +244,16 @@ if __name__ == '__main__':
                         ))#, total runtime: {} ({} average))
 
     torch.save(model.state_dict(), PATH+'.pt')
+
+#    CUDA_VISIBLE_DEVICES=0 python emultrainres.py \
+#    --batch 512 \
+#    --epoch 700 \
+#    --intdim 4 \
+#    --Nlayer 4\
+#    --Path 'model' \
+#    --extrainfo 'extra.npy' \
+#    --PCA 'PCA.npy' \
+#    --traininput 'traininput.npy' \
+#    --trainoutput 'trainoutput.npy' \
+#    --valiinput 'valiinput.npy' \
+#    --valioutput 'valioutput.npy' \
