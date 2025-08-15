@@ -138,6 +138,8 @@ batch_size = args.batch_size
 n_epoch = args.n_epoch
 cnndim = args.cnndim
 intdim = args.intdim
+As_pos = args.As_pos
+tau_pos = args.tau_pos
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
