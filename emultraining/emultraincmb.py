@@ -5,8 +5,7 @@ import sys, os
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from cobaya.theories.emulcmb.emulator import ResBlock, ResMLP, TRF, CNNMLP
 
-camb_ell_min          = 2#30
-camb_ell_max          = 3000
+
 parser = argparse.ArgumentParser(prog='cos_uniform')
 
 parser.add_argument("--camb_ell_min",
@@ -125,6 +124,20 @@ parser.add_argument("--tau_index",
                     const=1,
                     default=5)
 
+args, unknown = parser.parse_known_args()
+camb_ell_max = args.camb_ell_max
+camb_ell_min = args.camb_ell_min
+cov_file = args.cov_file
+extrainfo_file = args.extrainfo_file
+train_param_file = args.train_param_file
+vali_param_file = args.vali_param_file
+train_dv_file = args.train_dv_file
+vali_dv_file = args.vali_dv_file
+PATH = args.PATH
+batch_size = args.batch_size
+n_epoch = args.n_epoch
+cnndim = args.cnndim
+intdim = args.intdim
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
