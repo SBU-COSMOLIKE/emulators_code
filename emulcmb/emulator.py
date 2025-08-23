@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import sys, os
-from torch.utils.data import Dataset, DataLoader, TensorDataset
-
 
 class Supact(nn.Module):
     # New activation function, returns:
@@ -12,7 +10,6 @@ class Supact(nn.Module):
     # I chose the initial value for gamma to be all 1, and beta to be all 0
     def __init__(self, in_size):
         super(Supact, self).__init__()
-        
         self.gamma = nn.Parameter(torch.ones(in_size))
         self.beta = nn.Parameter(torch.zeros(in_size))
         self.m = nn.Sigmoid()
@@ -33,12 +30,11 @@ class Affine(nn.Module):
         self.bias = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
-
         return x * self.gain + self.bias
 
-class Better_Attention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, in_size ,n_partitions):
-        super(Better_Attention, self).__init__()
+        super(Attention, self).__init__()
 
         self.embed_dim    = in_size//n_partitions
         self.WQ           = nn.Linear(self.embed_dim,self.embed_dim)
@@ -68,9 +64,9 @@ class Better_Attention(nn.Module):
 
         return out
 
-class Better_Transformer(nn.Module):
+class Transformer(nn.Module):
     def __init__(self, in_size, n_partitions):
-        super(Better_Transformer, self).__init__()  
+        super(Transformer, self).__init__()  
     
         # get/set up hyperparams
         self.int_dim      = in_size//n_partitions 
@@ -113,37 +109,34 @@ class ResBlock(nn.Module):
         self.norm1 = Affine()
         self.norm2 = Affine()
 
-        self.act1 = Supact(in_size)#nn.Tanh()#nn.ReLU()#
-        self.act2 = Supact(in_size)#nn.Tanh()#nn.ReLU()#
+        self.act1 = Supact(in_size) #nn.Tanh()#nn.ReLU()#
+        self.act2 = Supact(in_size) #nn.Tanh()#nn.ReLU()#
 
     def forward(self, x):
         xskip = self.skip(x)
 
         o1 = self.act1(self.layer1(self.norm1(x)))
         o2 = self.act2(self.layer2(self.norm2(o1))) + xskip
-
         return o2
 
-
 class ResMLP(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim, N_layer):
 
         super(ResMLP, self).__init__()
 
         modules=[]
 
-        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
+        # Def: we set the internal dim as multiple of 128 (just simplicity)
         int_dim = int_dim * 128
 
-        # Def: we will only change the dimension of the datavector using linear transformations  
+        # Def: We only change the datavector dim using linear transformations
         modules.append(nn.Linear(input_dim, int_dim))
         
-        # Def: by design, a pure block has the input and output dimension to be the same
+        # Def: By design, a pure block has the equal input and output dimension
         for n in range(N_layer):
             # Def: This is what we defined as a pure MLP block
             # Why the Affine function?
-            #   R: this is for the Neuro-network to learn how to normalize the data between layer
+            # R: this is for the Neuro-network to learn how to normalize the data between layer
             modules.append(ResBlock(int_dim, int_dim))
             modules.append(Supact(int_dim))
         
@@ -162,40 +155,41 @@ class ResMLP(nn.Module):
 
         return out
 
-
-
 class TRF(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim, int_trf, N_channels):
-
         super(TRF, self).__init__()
 
         modules=[]
 
-        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
+        # Def: we set the internal dim as multiple of 128 (just simplicity)
         int_dim = int_dim * 128
 
-        # Def: we will only change the dimension of the datavector using linear transformations  
-        
         n_channels = N_channels
         int_dim_trf = int_trf
+        # Def: We only change the datavector dim using linear transformations 
         modules.append(nn.Linear(input_dim, int_dim))
+        
         modules.append(ResBlock(int_dim, int_dim))
         modules.append(Supact(int_dim))
         modules.append(ResBlock(int_dim, int_dim))
         modules.append(Supact(int_dim))
         modules.append(ResBlock(int_dim, int_dim))
         modules.append(Supact(int_dim))
+        
+        # Def: We only change the datavector dim using linear transformations 
         modules.append(nn.Linear(int_dim, int_dim_trf))
         modules.append(Supact(int_dim_trf))
-        modules.append(Better_Attention(int_dim_trf, n_channels))
-        modules.append(Better_Transformer(int_dim_trf, n_channels))
+        
+        modules.append(Attention(int_dim_trf, n_channels))
+        modules.append(Transformer(int_dim_trf, n_channels))
+        
+        # Def: We only change the datavector dim using linear transformations 
         modules.append(nn.Linear(int_dim_trf, output_dim))
+        
         modules.append(Affine())
 
         self.trf =nn.Sequential(*modules)#
         
-
     def forward(self, x):
 
         out = self.trf(x)
@@ -204,21 +198,21 @@ class TRF(nn.Module):
 
 
 class CNNMLP(nn.Module):
-
     def __init__(self, input_dim, output_dim, int_dim,cnn_dim):
-
         super(CNNMLP, self).__init__()
 
         modules = []
         self.outdim = output_dim
         self.cnn_dim = cnn_dim
-        # Def: we will set the internal dimension as multiple of 128 (reason: just simplicity)
+        
+        # Def: we set the internal dim as multiple of 128 (just simplicity)
         int_dim = int_dim * 128
         self.norm = Affine()
-        # Def: we will only change the dimension of the datavector using linear transformations  
+        
+        # Def: We only change the datavector dim using linear transformations  
         self.input_layer = nn.Linear(input_dim, int_dim)
         
-        # Def: by design, a pure block has the input and output dimension to be the same
+        # Def: By design, a pure block has the equal input and output dimension
         self.Res1 = ResBlock(int_dim, int_dim)
         self.Res2 = ResBlock(int_dim, int_dim)
         self.Res3 = ResBlock(int_dim, int_dim)
@@ -226,8 +220,8 @@ class CNNMLP(nn.Module):
         self.CNNtrans = nn.Linear(int_dim,cnn_dim)
 
         
-        # Def: the transformation from the internal dimension to the output dimension of the
-        #      data vector we intend to emulate
+        # Def: the transformation from the internal dimension to the output 
+        #      dimension of the data vector we intend to emulate
         self.Act1 = Supact(int_dim)#nn.Tanh()
         self.Act3 = Supact(int_dim)#nn.Tanh()
         self.Act4 = Supact(int_dim)#nn.Tanh()

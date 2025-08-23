@@ -1,5 +1,15 @@
 *.pyc
+.DS_Store
 emulsn/__pycache__
 emulcmb/__pycache__
 emulbaosn/__pycache__
-lsst_y1_cosmic_shear_emulator/__pycache__
+emul_cosmic_shear/__pycache__
+emul_wtheta/__pycache__
+emul_ggl/__pycache__
+
+emulsn/.DS_Store
+emulcmb/.DS_Store
+emulbaosn/.DS_Store
+emul_cosmic_shear/.DS_Store
+emul_wtheta/.DS_Store
+emul_ggl/.DS_Store
