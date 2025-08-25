@@ -82,6 +82,28 @@ likelihood:
 
 
 params:
+  tau:
+    prior:
+      min: 0.01
+      max: 0.2
+    ref:
+      dist: norm
+      loc: 0.055
+      scale: 0.006
+    proposal: 0.003
+    latex: \tau_\mathrm{reio}
+
+  logA:
+    prior:
+      min: 1.61
+      max: 3.91
+    ref:
+      dist: norm
+      loc: 3.0448
+      scale: 0.05
+    proposal: 3
+    latex: \log(10^{10} A_\mathrm{s})
+    drop: true
   
   omegabh2:
     prior:
@@ -113,28 +135,6 @@ params:
       scale: 2
     proposal: 0.001
     latex: H_0
-  tau:
-    prior:
-      min: 0.01
-      max: 0.2
-    ref:
-      dist: norm
-      loc: 0.055
-      scale: 0.006
-    proposal: 0.003
-    latex: \tau_\mathrm{reio}
-
-  logA:
-    prior:
-      min: 1.61
-      max: 3.91
-    ref:
-      dist: norm
-      loc: 3.0448
-      scale: 0.05
-    proposal: 3
-    latex: \log(10^{10} A_\mathrm{s})
-    drop: true
   ns:
     prior:
       min: 0.6
