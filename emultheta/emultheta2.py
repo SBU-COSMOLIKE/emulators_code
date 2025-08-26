@@ -10,9 +10,15 @@ class emultheta():
         imax = 1
         for name in ("M", "info", "ord", "extrapar"):
             setattr(self, name, [None] * imax)
-        self.device = self.extra_args.get("device")
-        if self.device == "cuda":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu" if (d := self.extra_args.get("device")) is None else d.lower()
+        self.device = (
+            "cuda" if ((req := self.device.lower()) == "cuda" and torch.cuda.is_available()) 
+            else "mps" if (req in ("cuda","mps") 
+                        and hasattr(torch.backends, "mps") 
+                        and torch.backends.mps.is_built() 
+                        and torch.backends.mps.is_available()) 
+            else "cpu"
+        )
 
         # BASIC CHECKS BEGINS ------------------------------------------------
         _required_lists = [

@@ -24,7 +24,15 @@ class emul_cosmic_shear(Theory):
         for name in ("X_mean", "X_std", "Y_mean", "dv_evals", "dv_evecs", "inv_dv_evecs"):
             setattr(self, name, [None] * imax)
         self.req   = [] 
-        self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
+        self.device = "cpu" if (d := self.extra_args.get("device")) is None else d.lower()
+        self.device = (
+            "cuda" if ((req := self.device) == "cuda" and torch.cuda.is_available()) 
+            else "mps" if (req in ("cuda","mps") 
+                        and hasattr(torch.backends, "mps") 
+                        and torch.backends.mps.is_built() 
+                        and torch.backends.mps.is_available()) 
+            else "cpu"
+        )
 
         # BASIC CHECKS BEGINS ------------------------------------------------
         _required_lists = [
