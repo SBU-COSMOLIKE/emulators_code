@@ -6,6 +6,18 @@ from cobaya.theory import Theory
 from cobaya.theories.emulcmb.emulator import ResBlock, ResMLP, TRF, CNNMLP
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
+try:
+    import torch_xla.core.xla_model as xm
+    _tpu_ok = bool(xm.get_xla_supported_devices("TPU"))
+except Exception:
+    xm, _tpu_ok = None, False
+
+def get_device(dev: str):
+    if dev == "tpu":
+        if xm is None or not _tpu_ok:
+            raise RuntimeError("TPU requested but torch_xla is not available.")
+        return xm.xla_device()
+    return torch.device(dev)
 
 class emulcmb(Theory):
     renames: Mapping[str, str] = empty_dict
@@ -33,8 +45,10 @@ class emulcmb(Theory):
                         and hasattr(torch.backends, "mps") 
                         and torch.backends.mps.is_built() 
                         and torch.backends.mps.is_available()) 
+            else "tpu" if (req in ("cuda","tpu") and _tpu_ok)
             else "cpu"
         )
+        self.device = get_device(self.device)
 
         if (teval := self.extra_args.get('eval')) is not None:
             for i in range(imax):

@@ -4,6 +4,18 @@ import numpy as np
 import os.path as path
 from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP
 from scipy import interpolate
+try:
+    import torch_xla.core.xla_model as xm
+    _tpu_ok = bool(xm.get_xla_supported_devices("TPU"))
+except Exception:
+    xm, _tpu_ok = None, False
+
+def get_device(dev: str):
+    if dev == "tpu":
+        if xm is None or not _tpu_ok:
+            raise RuntimeError("TPU requested but torch_xla is not available.")
+        return xm.xla_device()
+    return torch.device(dev)
 
 class emulbaosn():    
     def __init__(self, extra_args):
@@ -12,7 +24,17 @@ class emulbaosn():
         self.imax = 2
         for name in ("M", "info", "ord", "z", "tmat", "extrapar", "offset"):
             setattr(self, name, [None] * self.imax)
-        self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
+        self.device = "cpu" if (d := self.extra_args.get("device")) is None else d.lower()
+        self.device = (
+            "cuda" if ((req := self.device) == "cuda" and torch.cuda.is_available()) 
+            else "mps" if (req in ("cuda","mps") 
+                        and hasattr(torch.backends, "mps") 
+                        and torch.backends.mps.is_built() 
+                        and torch.backends.mps.is_available()) 
+            else "tpu" if (req in ("cuda","tpu") and _tpu_ok)
+            else "cpu"
+        )
+        self.device = get_device(self.device)
 
         # BASIC CHECKS BEGINS --------------------------------------------------
         _required_lists = [
