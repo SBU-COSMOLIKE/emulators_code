@@ -20,13 +20,6 @@ def get_device(dev: str):
         return xm.xla_device()
     return torch.device(dev)
 
-def get_device(dev: str):
-    if dev == "tpu":
-        if xm is None or not _tpu_ok:
-            raise RuntimeError("TPU requested but torch_xla is not available.")
-        return xm.xla_device()
-    return torch.device(dev)
-
 class emulbaosn(Theory):
     renames: Mapping[str, str] = empty_dict
     extra_args: InfoDict = {}

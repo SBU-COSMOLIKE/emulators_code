@@ -18,13 +18,6 @@ def get_device(dev: str):
         return xm.xla_device()
     return torch.device(dev)
 
-def get_device(dev: str):
-    if dev == "tpu":
-        if xm is None or not _tpu_ok:
-            raise RuntimeError("TPU requested but torch_xla is not available.")
-        return xm.xla_device()
-    return torch.device(dev)
-
 class emulcmb():    
     def __init__(self, extra_args):
         self.extra_args = extra_args
