@@ -294,7 +294,7 @@ if __name__ == '__main__':
         np.save(EXTRA_DIR, result_extra)
             
     else:    
-        comm.send(total_cls[:,:,0], dest = 0, tag = 10)
+        comm.send(total_cls, dest = 0, tag = 10)
         comm.send(extra_dv, dest = 0, tag = 12)
 
 
