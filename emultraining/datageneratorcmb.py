@@ -287,7 +287,7 @@ if __name__ == '__main__':
         result_extra[0:total_num_dvs:num_ranks]   = extra_dv ##0: 100theta^*, 1: r_drag
 
         for i in range(1,num_ranks):        
-            result_cls[i:total_num_dvs:num_ranks,:,0] = comm.recv(source = i, tag = 10)
+            result_cls[i:total_num_dvs:num_ranks] = comm.recv(source = i, tag = 10)
             result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
 
         np.save(CMB_DIR, result_cls)
