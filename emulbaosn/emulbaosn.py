@@ -170,7 +170,20 @@ class emulbaosn(Theory):
                                      assume_sorted=True,
                                      fill_value="extrapolate")
         zstep = np.linspace(0.0, self.z[0][-1], 2*len(self.z[0])+1)
-        dl    = self.cumulative_simpson(zstep,func(zstep))*(1 + zstep)
+
+        chi   = self.cumulative_simpson(zstep,func(zstep))
+        if 'omk' in params:
+            K_abs = abs(params['omk'])*(params['H0']/2.99792458e5)**2
+            if params['omk']==0:
+                dl = chi*(1 + zstep)
+            elif params['omk']>0:
+                dl = np.sinh(chi*K_abs)/K_abs*(1 + zstep)
+            else:
+                dl = np.sin(chi*K_abs)/K_abs*(1 + zstep)
+        else:
+            dl = chi*(1 + zstep)
+
+
         state["da_interp"] = interpolate.interp1d(zstep, 
                                                   dl/(1.0+zstep)**2,
                                                   kind='cubic',
