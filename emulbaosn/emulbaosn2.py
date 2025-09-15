@@ -169,7 +169,7 @@ class emulbaosn():
         chi   = self.cumulative_simpson(zstep,func(zstep))#*(1 + zstep)
         if 'omk' in params:
             K_abs = abs(params['omk'])*(params['H0']/2.99792458e5)**2
-            if params['omk']==0:
+            if np.isclose(params['omk'], 0.0, atol=1e-12):
                 dl = chi*(1 + zstep)
             elif params['omk']>0:
                 dl = np.sinh(chi*K_abs)/K_abs*(1 + zstep)

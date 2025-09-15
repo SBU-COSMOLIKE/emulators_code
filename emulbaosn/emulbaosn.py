@@ -7,18 +7,6 @@ from cobaya.theories.emulbaosn.emulator import ResBlock, ResMLP
 from scipy import interpolate
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
-try:
-    import torch_xla.core.xla_model as xm
-    _tpu_ok = bool(xm.get_xla_supported_devices("TPU"))
-except Exception:
-    xm, _tpu_ok = None, False
-
-def get_device(dev: str):
-    if dev == "tpu":
-        if xm is None or not _tpu_ok:
-            raise RuntimeError("TPU requested but torch_xla is not available.")
-        return xm.xla_device()
-    return torch.device(dev)
 
 class emulbaosn(Theory):
     renames: Mapping[str, str] = empty_dict
@@ -33,17 +21,8 @@ class emulbaosn(Theory):
         for name in ("M", "info", "ord", "z", "tmat", "extrapar", "offset"):
             setattr(self, name, [None] * self.imax)
         self.req = [] 
-        self.device = "cpu" if (d := self.extra_args.get("device")) is None else d.lower()
-        self.device = (
-            "cuda" if ((req := self.device) == "cuda" and torch.cuda.is_available()) 
-            else "mps" if (req in ("cuda","mps") 
-                        and hasattr(torch.backends, "mps") 
-                        and torch.backends.mps.is_built() 
-                        and torch.backends.mps.is_available()) 
-            else "tpu" if (req in ("cuda","tpu") and _tpu_ok)
-            else "cpu"
-        )
-        self.device = get_device(self.device)        
+        
+        self.device = "cuda" if self.extra_args.get("device") == "cuda" and torch.cuda.is_available() else "cpu"
         
         # BASIC CHECKS BEGINS --------------------------------------------------
         _required_lists = [
@@ -195,7 +174,7 @@ class emulbaosn(Theory):
         chi   = self.cumulative_simpson(zstep,func(zstep))
         if 'omk' in params:
             K_abs = abs(params['omk'])*(params['H0']/2.99792458e5)**2
-            if np.isclose(params['omk'], 0, atol=1e-12):
+            if np.isclose(params['omk'], 0.0, atol=1e-12):
                 dl = chi*(1 + zstep)
             elif params['omk']>0:
                 dl = np.sinh(chi*K_abs)/K_abs*(1 + zstep)
