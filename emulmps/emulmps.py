@@ -2,7 +2,7 @@
 Fast Matter Power Spectrum Emulator for Cobaya
 
 This module provides a neural network-based emulator for cosmological matter
-power spectra within the Cobaya framework. It uses a local fastMPS module
+power spectra within the Cobaya framework. It uses a local emulmps module
 that handles all model loading and prediction internally.
 
 The emulator predicts linear matter power spectra P_lin(k,z) from cosmological
@@ -21,16 +21,16 @@ from typing import Mapping, Tuple, Optional
 from cobaya.typing import empty_dict, InfoDict
 from cobaya.log import LoggedError, get_logger
 
-# Import the local fastMPS module
+# Import the local emulmps module
 try:
-    from .fastMPS_emul import fastMPS_w0wa as fastMPS_emul
+    from .emulmps_emul import emulmps_w0wa as emulmps_emul
 except ImportError:
     try:
         # Alternative import path if running from different location
-        from .fastMPS_emul.fastMPS_w0wa import get_pks
+        from .emulmps_emul.emulmps_w0wa import get_pks
     except ImportError as e:
         raise ImportError(
-            "Could not import fastMPS module. Ensure the fastMPS directory "
+            "Could not import emulmps module. Ensure the emulmps directory "
             "is present in the same directory as this theory file. "
             f"Error: {e}"
         )
@@ -182,7 +182,7 @@ class PowerSpectrumInterpolator(RectBivariateSpline):
         return super().__call__(*args, **kwargs)
 
 
-class fastMPS(Theory):
+class emulmps(Theory):
     """
     Fast Matter Power Spectrum Emulator Theory Code.
     
@@ -222,7 +222,7 @@ class fastMPS(Theory):
         """
         Initialize the emulator theory code.
         
-        This method is called by Cobaya during setup. Since the fastMPS module
+        This method is called by Cobaya during setup. Since the emulmps module
         handles all loading internally, initialization is minimal - we only need
         to specify which parameters to use and in what order.
         
@@ -287,7 +287,7 @@ class fastMPS(Theory):
             cosmo_type = "LCDM"
         
         self.log.info(
-            f"fastMPS emulator initialized with {cosmo_type} cosmology"
+            f"emulmps emulator initialized with {cosmo_type} cosmology"
         )
         self.log.info(f"Parameter order: {self.param_order}")
 
@@ -306,7 +306,7 @@ class fastMPS(Theory):
         
         This is the main calculation method called by Cobaya during sampling.
         It extracts the required parameters, converts to emulator format,
-        calls the fastMPS emulator, and stores the result.
+        calls the emulmps emulator, and stores the result.
         
         The emulator returns P(k,z) in units of h/Mpc for k and (Mpc/h)^3 for Pk.
         We convert to standard Cobaya units: 1/Mpc for k and Mpc^3 for Pk.
@@ -367,7 +367,7 @@ class fastMPS(Theory):
                 emul_params.append(0.0)   # wa = 0
                 self.log.debug("LCDM mode: using w0=-1.0, wa=0.0")
             
-            # Call the fastMPS emulator
+            # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk ((Mpc/h)^3)
             k_hmpc, z_array, Pk_hmpc = get_pks(emul_params)
             
@@ -416,13 +416,13 @@ class fastMPS(Theory):
         except Exception as e:
             if self.stop_at_error:
                 self.log.error(
-                    f"fastMPS emulator evaluation failed: {e}\n"
+                    f"emulmps emulator evaluation failed: {e}\n"
                     f"Parameters: {params}"
                 )
                 raise
             else:
                 self.log.debug(
-                    f"fastMPS emulator evaluation failed: {e}\n"
+                    f"emulmps emulator evaluation failed: {e}\n"
                     f"Returning False (likelihood=0)."
                 )
                 return False
@@ -446,13 +446,13 @@ class fastMPS(Theory):
         if var_pair != ("delta_tot", "delta_tot"):
             raise LoggedError(
                 self.log,
-                f"fastMPS only supports delta_tot power spectra, not {var_pair}"
+                f"emulmps only supports delta_tot power spectra, not {var_pair}"
             )
         
         if nonlinear:
             raise LoggedError(
                 self.log,
-                "fastMPS emulator only provides linear P(k). "
+                "emulmps emulator only provides linear P(k). "
                 "Set nonlinear=False or apply nonlinear corrections separately."
             )
         
@@ -498,13 +498,13 @@ class fastMPS(Theory):
         if var_pair != ("delta_tot", "delta_tot"):
             raise LoggedError(
                 self.log,
-                f"fastMPS only supports delta_tot power spectra, not {var_pair}"
+                f"emulmps only supports delta_tot power spectra, not {var_pair}"
             )
         
         if nonlinear:
             raise LoggedError(
                 self.log,
-                "fastMPS emulator only provides linear P(k). "
+                "emulmps emulator only provides linear P(k). "
                 "Set nonlinear=False or apply nonlinear corrections separately."
             )
         
@@ -662,6 +662,6 @@ class fastMPS(Theory):
         """
         Return relative speed estimate.
         
-        The fastMPS emulator is very fast - approximately 50x faster than CAMB.
+        The emulmps emulator is very fast - approximately 50x faster than CAMB.
         """
         return 50.0
