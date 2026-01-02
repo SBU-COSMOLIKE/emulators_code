@@ -5,8 +5,8 @@ This module provides a neural network-based emulator for cosmological matter
 power spectra within the Cobaya framework. It uses a local emulmps module
 that handles all model loading and prediction internally.
 
-The emulator predicts linear matter power spectra P_lin(k,z) from cosmological
-parameters using a trained neural network model.
+The emulator predicts matter power spectra P(k,z) from cosmological parameters.
+By default, both linear and nonlinear P(k) are computed (using halofit+).
 
 Supports LCDM, wCDM, and w0waCDM cosmologies.
 
@@ -220,8 +220,8 @@ class emulmps(Theory):
     
     This class provides a fast neural network emulator that replaces expensive
     Boltzmann calculations. It predicts matter power spectra P(k,z) from 
-    cosmological parameters. By default it provides linear P(k), but can optionally
-    apply nonlinear corrections using symbolic_pofk.
+    cosmological parameters. By default, both linear and nonlinear P(k) are 
+    computed using halofit+ corrections.
     
     The emulator internally expects parameters in the format:
         [As_1e9, ns, H0, omegab, omegam, w0, wa]
@@ -237,27 +237,31 @@ class emulmps(Theory):
         - 'w' is automatically treated as 'w0' with wa=0 (wCDM)
         - If neither w0 nor w are provided, defaults to w0=-1, wa=0 (LCDM)
     
-    Nonlinear corrections (optional):
-        Set 'nonlinear_method' in extra_args to enable nonlinear P(k):
-        - 'syrenhalofit': Uses SYREN-halofit with ML corrections (recommended)
-        - 'halofit+': Uses halofit+ without ML corrections
-        - None: Linear P(k) only (default)
+    Nonlinear corrections:
+        Set 'nonlinear_method' in extra_args to choose method:
+        - 'syrenhalofit': Uses SYREN-halofit with ML corrections
+        - 'halofit+': Uses halofit+ without ML corrections (DEFAULT)
+        - None: Linear P(k) only
         
-        Requires: pip install symbolic_pofk
+        When nonlinear_method is configured (including default), BOTH linear and 
+        nonlinear P(k) are computed. Use the 'nonlinear' flag in get_Pk_grid() and 
+        get_Pk_interpolator() to select which to retrieve:
+            - get_Pk_grid(nonlinear=False) -> returns linear P(k)
+            - get_Pk_grid(nonlinear=True) -> returns nonlinear P(k)
         
         The nonlinear boost B(k,z) = P_nl/P_lin is computed using symbolic_pofk,
-        then applied to the emulated linear spectrum: P_nl,emul = P_lin,emul × B
+        then applied to the emulated linear spectrum: P_nl,emul = P_lin,emul x B
     
     Attributes:
         renames: Mapping for parameter name translations
         extra_args: Configuration dictionary
             - param_order: List of parameter names (see initialize())
-            - nonlinear_method: Optional nonlinear correction method
+            - nonlinear_method: Nonlinear correction method (default: 'halofit+')
         
         # Runtime attributes
         req: Dictionary of required parameters
         param_order: List of parameter names in the order expected by emulator
-        nonlinear_method: Nonlinear correction method (if configured)
+        nonlinear_method: Nonlinear correction method
     """
     
     # Class-level attributes required by Cobaya
@@ -276,6 +280,7 @@ class emulmps(Theory):
         The method expects extra_args to contain:
             - 'param_order': List of parameter names in order
               Default: ["As_1e9", "ns", "H0", "omegab", "omegam", "w0", "wa"]
+            - 'nonlinear_method': Nonlinear method (default: 'halofit+')
         
         Cosmology options:
             - LCDM: ["As_1e9", "ns", "H0", "omegab", "omegam"]
@@ -289,7 +294,7 @@ class emulmps(Theory):
         self.extra_args = getattr(self, 'extra_args', {})
         
         # Get nonlinear correction method
-        # Options: None (linear only), 'syrenhalofit', 'halofit+'
+        # Default is 'halofit+' (from VM)
         self.nonlinear_method = self.extra_args.get('nonlinear_method', None)
         
         # Validate nonlinear method
@@ -383,6 +388,8 @@ class emulmps(Theory):
         The emulator returns P(k,z) in units of h/Mpc for k and (Mpc/h)^3 for Pk.
         We convert to standard Cobaya units: 1/Mpc for k and Mpc^3 for Pk.
         
+        By default, both linear and nonlinear P(k) are computed and stored.
+        
         Parameter handling:
             - 'w' is treated as 'w0' with wa=0
             - If neither w0/wa nor w are provided, defaults to w0=-1, wa=0 (LCDM)
@@ -440,15 +447,17 @@ class emulmps(Theory):
                 self.log.debug("LCDM mode: using w0=-1.0, wa=0.0")
             
             # Call the emulmps emulator
-            # Returns: k_modes (h/Mpc), z_modes, Pk ((Mpc/h)^3)
-            k_hmpc, z_array, Pk_hmpc = get_pks(emul_params)
+            # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
+            k_hmpc, z_array, Pk_lin_hmpc = get_pks(emul_params)
             
             # ===================================================================
-            # NONLINEAR CORRECTIONS (if requested)
+            # NONLINEAR CORRECTIONS (computed by default)
             # ===================================================================
+            # Compute nonlinear P(k) using boost method
+            Pk_nl_hmpc = None
             if self.nonlinear_method is not None:
-                Pk_hmpc = self._apply_nonlinear_boost(
-                    Pk_hmpc, k_hmpc, z_array, params
+                Pk_nl_hmpc = self._apply_nonlinear_boost(
+                    Pk_lin_hmpc, k_hmpc, z_array, params
                 )
             
             # ===================================================================
@@ -463,29 +472,36 @@ class emulmps(Theory):
             k_mpc = k_hmpc / h
             
             # Convert Pk: (Mpc/h)^3 -> Mpc^3
-            Pk_mpc = Pk_hmpc * h**3
+            Pk_lin_mpc = Pk_lin_hmpc * h**3
             
-            # Store results in state dictionary with key matching Cobaya convention
+            # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
             state[("Pk_grid", False, "delta_tot", "delta_tot")] = (
-                k_mpc, z_array, Pk_mpc
+                k_mpc, z_array, Pk_lin_mpc
             )
             
-            # Also store in simple format for backward compatibility
+            # Store NONLINEAR P(k) if computed
+            if Pk_nl_hmpc is not None:
+                Pk_nl_mpc = Pk_nl_hmpc * h**3
+                state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
+                    k_mpc, z_array, Pk_nl_mpc
+                )
+            
+            # Also store in simple format for backward compatibility (linear)
             state["Pk_grid"] = {
-                'k': k_mpc,      # Shape: (2400,), in 1/Mpc
-                'z': z_array,    # Shape: (122,)
-                'Pk': Pk_mpc     # Shape: (122, 2400), in Mpc^3
+                'k': k_mpc,          # Shape: (2400,), in 1/Mpc
+                'z': z_array,        # Shape: (122,)
+                'Pk': Pk_lin_mpc     # Shape: (122, 2400), in Mpc^3 (LINEAR)
             }
             
             # Optionally compute and store derived parameters
             if want_derived:
                 derived = {}
                 
-                # Compute sigma8 at z=0 if requested
+                # Compute sigma8 at z=0 if requested (using linear P(k))
                 if 'sigma8' in self.output_params:
                     derived['sigma8'] = self._compute_sigma8(
-                        Pk_hmpc, k_hmpc, z_array, z=0.0
+                        Pk_lin_hmpc, k_hmpc, z_array, z=0.0
                     )
                 
                 state["derived"] = derived
@@ -516,7 +532,7 @@ class emulmps(Theory):
         
         Args:
             var_pair: which power spectrum (only delta_tot supported)
-            nonlinear: whether linear or non-linear (only linear supported)
+            nonlinear: if True, return nonlinear P(k); if False, return linear P(k)
         
         Returns:
             Tuple of (k, z, Pk) where k and z are 1-d arrays,
@@ -529,26 +545,28 @@ class emulmps(Theory):
                 f"emulmps only supports delta_tot power spectra, not {var_pair}"
             )
         
-        if nonlinear:
+        # Check if nonlinear requested but nonlinear_method explicitly disabled
+        if nonlinear and self.nonlinear_method is None:
             raise LoggedError(
                 self.log,
-                "emulmps emulator only provides linear P(k). "
-                "Set nonlinear=False or apply nonlinear corrections separately."
+                "Nonlinear P(k) requested but nonlinear_method=None. "
+                "Set nonlinear_method='syrenhalofit' or 'halofit+' in extra_args."
             )
         
         # Try to get from state with standard key format
-        key = ("Pk_grid", False) + tuple(sorted(var_pair))
+        key = ("Pk_grid", nonlinear) + tuple(sorted(var_pair))
         if key in self.current_state:
             return self.current_state[key]
         
-        # Fallback: get from simple format and return
-        if "Pk_grid" in self.current_state:
+        # Fallback: get from simple format (always linear)
+        if not nonlinear and "Pk_grid" in self.current_state:
             pk_dict = self.current_state["Pk_grid"]
             return pk_dict['k'], pk_dict['z'], pk_dict['Pk']
         
         raise LoggedError(
             self.log,
-            "Matter power spectrum not computed. This should not happen."
+            f"Matter power spectrum (nonlinear={nonlinear}) not computed. "
+            f"This should not happen."
         )
 
     def get_Pk_interpolator(
@@ -565,7 +583,7 @@ class emulmps(Theory):
         
         Args:
             var_pair: variable pair for power spectrum (only delta_tot supported)
-            nonlinear: if True, return nonlinear spectrum (requires nonlinear_method set)
+            nonlinear: if True, return nonlinear interpolator; if False, return linear
             extrap_kmin: use log-linear extrapolation from extrap_kmin up to min k
             extrap_kmax: use log-linear extrapolation beyond max k up to extrap_kmax
         
@@ -581,19 +599,12 @@ class emulmps(Theory):
                 f"emulmps only supports delta_tot power spectra, not {var_pair}"
             )
         
+        # Check if nonlinear requested but nonlinear_method explicitly disabled
         if nonlinear and self.nonlinear_method is None:
             raise LoggedError(
                 self.log,
-                "Nonlinear P(k) requested but no nonlinear_method configured. "
-                "Set nonlinear_method='syrenhalofit' or 'halofit+' in extra_args, "
-                "or set nonlinear=False to use linear P(k)."
-            )
-        
-        # If nonlinear requested but method not set, inform user
-        if not nonlinear and self.nonlinear_method is not None:
-            self.log.debug(
-                f"Linear P(k) requested but nonlinear_method='{self.nonlinear_method}' "
-                f"is configured. Returning linear spectrum as requested."
+                "Nonlinear P(k) requested but nonlinear_method=None. "
+                "Set nonlinear_method='syrenhalofit' or 'halofit+' in extra_args."
             )
         
         # Create unique key for caching
@@ -606,17 +617,14 @@ class emulmps(Theory):
         if key in self.current_state:
             return self.current_state[key]
         
-        # Get the power spectrum grid
-        # Note: If nonlinear_method is set, the stored Pk_grid is already nonlinear
-        # So we check if nonlinear is requested and if we have nonlinear data
-        use_nonlinear = nonlinear and self.nonlinear_method is not None
-        k, z, pk = self.get_Pk_grid(var_pair=var_pair, nonlinear=False)
+        # Get the power spectrum grid (linear or nonlinear based on flag)
+        k, z, pk = self.get_Pk_grid(var_pair=var_pair, nonlinear=nonlinear)
         
         # Check if we should use log interpolation
         log_p = True
         sign = 1
         
-        # Handle negative values (shouldn't happen for linear matter PS, but be safe)
+        # Handle negative values (shouldn't happen for matter PS, but be safe)
         if np.any(pk < 0):
             if np.all(pk < 0):
                 sign = -1
@@ -663,12 +671,7 @@ class emulmps(Theory):
         
         This method computes the boost B(k,z) = P_nl(k,z) / P_lin(k,z) using
         symbolic_pofk, then applies it to the emulated linear spectrum:
-            P_nl,emul = P_lin,emul × B_symbolic
-        
-        This approach is theoretically sound because:
-        - The boost is relatively insensitive to small differences in linear P(k)
-        - It preserves the emulator's corrections to match CAMB linear
-        - The nonlinear physics (halofit) is applied correctly
+            P_nl,emul = P_lin,emul x B_symbolic
         
         Args:
             Pk_lin_hmpc: Linear power spectrum in (Mpc/h)^3, shape (n_z, n_k)
