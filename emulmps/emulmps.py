@@ -307,6 +307,10 @@ class emulmps(Theory):
                     f"Invalid nonlinear_method '{self.nonlinear_method}'. "
                     f"Valid options: {valid_methods}"
                 )
+        else:
+            # VM BEGINS
+            self.nonlinear_method = 'halofit+' # VM set a default
+            #VM ENDS
         
         # Get parameter ordering from config, or use default w0waCDM ordering
         self.param_order = self.extra_args.get(
