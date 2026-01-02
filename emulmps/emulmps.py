@@ -24,6 +24,7 @@ from cobaya.log import LoggedError, get_logger
 # Import the local emulmps module
 try:
     from .emulmps_emul import emulmps_w0wa as emulmps_emul
+    from emulmps_emul import get_pks
 except ImportError:
     try:
         # Alternative import path if running from different location

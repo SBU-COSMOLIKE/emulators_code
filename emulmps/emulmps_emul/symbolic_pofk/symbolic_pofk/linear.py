@@ -4,6 +4,7 @@ import scipy.integrate
 from colossus.cosmology import cosmology
 
 
+
 def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_norm=True):
     """
     Compute the Eisentein & Hu 1998 zero-baryon approximation to P(k) at z=0
@@ -24,7 +25,6 @@ def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_no
     Returns:
         :pk_eh (np.ndarray): The Eisenstein & Hu 1998 zero-baryon P(k) [(Mpc/h)^3]
     """
-
     if use_colossus:
         cosmo_params = {
             'flat': True,
@@ -36,7 +36,6 @@ def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_no
         }
         cosmo = cosmology.setCosmology('myCosmo', **cosmo_params)
         pk_eh = cosmo.matterPowerSpectrum(k, z=0.0, model='eisenstein98_zb')
-
     elif integral_norm:
         ombom0 = Ob / Om
         om0h2 = Om * h**2
