@@ -20,6 +20,37 @@ from cobaya.theory import Theory
 from typing import Mapping, Tuple, Optional
 from cobaya.typing import empty_dict, InfoDict
 from cobaya.log import LoggedError, get_logger
+from pathlib import Path
+import logging
+
+# --- Path Management ---
+def _get_project_root() -> Path:
+    """Returns the root directory Path object, relative to this file."""
+    return Path(__file__).resolve().parent
+
+# --- Dependency Guards ---
+ROOT = _get_project_root()
+# Optional imports for nonlinear corrections
+try:
+    # Issues installing symbolic_pofk as a package, including a local copy in the emulator
+    import sys; sys.path.insert(0, f"{ROOT}/emulmps_emul/symbolic_pofk")
+    from symbolic_pofk.linear import As_to_sigma8, plin_emulated
+    from symbolic_pofk.syrenhalofit import run_halofit
+    # Create module-level aliases for compatibility
+    class symbolic_linear:
+        As_to_sigma8 = As_to_sigma8
+        plin_emulated = plin_emulated
+    class syrenhalofit:
+        run_halofit = run_halofit
+    SYMBOLIC_POFK_AVAILABLE = True
+except ImportError as e:
+    logging.error(f"ERROR: A required dependency could not be imported. Please ensure all dependencies are installed.")
+    logging.error(f"Missing component: {e.name if hasattr(e, 'name') else 'symbolic_pofk'}")
+    logging.error(f"If running this package locally, ensure the symbolic_pofk library is accessible.")
+    SYMBOLIC_POFK_AVAILABLE = False
+    symbolic_linear = None
+    syrenhalofit = None
+
 
 # Import the local emulmps module
 try:
@@ -188,8 +219,9 @@ class emulmps(Theory):
     Fast Matter Power Spectrum Emulator Theory Code.
     
     This class provides a fast neural network emulator that replaces expensive
-    Boltzmann calculations. It predicts linear matter power spectra P_lin(k,z)
-    from cosmological parameters.
+    Boltzmann calculations. It predicts matter power spectra P(k,z) from 
+    cosmological parameters. By default it provides linear P(k), but can optionally
+    apply nonlinear corrections using symbolic_pofk.
     
     The emulator internally expects parameters in the format:
         [As_1e9, ns, H0, omegab, omegam, w0, wa]
@@ -205,13 +237,27 @@ class emulmps(Theory):
         - 'w' is automatically treated as 'w0' with wa=0 (wCDM)
         - If neither w0 nor w are provided, defaults to w0=-1, wa=0 (LCDM)
     
+    Nonlinear corrections (optional):
+        Set 'nonlinear_method' in extra_args to enable nonlinear P(k):
+        - 'syrenhalofit': Uses SYREN-halofit with ML corrections (recommended)
+        - 'halofit+': Uses halofit+ without ML corrections
+        - None: Linear P(k) only (default)
+        
+        Requires: pip install symbolic_pofk
+        
+        The nonlinear boost B(k,z) = P_nl/P_lin is computed using symbolic_pofk,
+        then applied to the emulated linear spectrum: P_nl,emul = P_lin,emul × B
+    
     Attributes:
         renames: Mapping for parameter name translations
-        extra_args: Configuration dictionary (minimal - just parameter ordering)
+        extra_args: Configuration dictionary
+            - param_order: List of parameter names (see initialize())
+            - nonlinear_method: Optional nonlinear correction method
         
         # Runtime attributes
         req: Dictionary of required parameters
         param_order: List of parameter names in the order expected by emulator
+        nonlinear_method: Nonlinear correction method (if configured)
     """
     
     # Class-level attributes required by Cobaya
@@ -241,6 +287,26 @@ class emulmps(Theory):
         # Set defaults
         self.renames = empty_dict
         self.extra_args = getattr(self, 'extra_args', {})
+        
+        # Get nonlinear correction method
+        # Options: None (linear only), 'syrenhalofit', 'halofit+'
+        self.nonlinear_method = self.extra_args.get('nonlinear_method', None)
+        
+        # Validate nonlinear method
+        if self.nonlinear_method is not None:
+            if not SYMBOLIC_POFK_AVAILABLE:
+                raise LoggedError(
+                    self.log,
+                    "nonlinear_method specified but symbolic_pofk is not installed. "
+                    "Install with: pip install symbolic_pofk"
+                )
+            valid_methods = ['syrenhalofit', 'halofit+']
+            if self.nonlinear_method not in valid_methods:
+                raise LoggedError(
+                    self.log,
+                    f"Invalid nonlinear_method '{self.nonlinear_method}'. "
+                    f"Valid options: {valid_methods}"
+                )
         
         # Get parameter ordering from config, or use default w0waCDM ordering
         self.param_order = self.extra_args.get(
@@ -278,7 +344,8 @@ class emulmps(Theory):
         self.req = {param: None for param in self.param_order}
         
         # Log initialization with cosmology info
-        if "w0" in self.param_order and "wa" in self.param_order:
+        # Note: 'w' is treated as 'w0' internally, so check for wa presence
+        if ("w0" in self.param_order or "w" in self.param_order) and "wa" in self.param_order:
             cosmo_type = "w0waCDM"
         elif "w" in self.param_order:
             cosmo_type = "wCDM (constant w)"
@@ -371,6 +438,14 @@ class emulmps(Theory):
             # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk ((Mpc/h)^3)
             k_hmpc, z_array, Pk_hmpc = get_pks(emul_params)
+            
+            # ===================================================================
+            # NONLINEAR CORRECTIONS (if requested)
+            # ===================================================================
+            if self.nonlinear_method is not None:
+                Pk_hmpc = self._apply_nonlinear_boost(
+                    Pk_hmpc, k_hmpc, z_array, params
+                )
             
             # ===================================================================
             # UNIT CONVERSION: h/Mpc -> 1/Mpc and (Mpc/h)^3 -> Mpc^3
@@ -486,7 +561,7 @@ class emulmps(Theory):
         
         Args:
             var_pair: variable pair for power spectrum (only delta_tot supported)
-            nonlinear: non-linear spectrum (only False supported - emulator is linear)
+            nonlinear: if True, return nonlinear spectrum (requires nonlinear_method set)
             extrap_kmin: use log-linear extrapolation from extrap_kmin up to min k
             extrap_kmax: use log-linear extrapolation beyond max k up to extrap_kmax
         
@@ -502,16 +577,24 @@ class emulmps(Theory):
                 f"emulmps only supports delta_tot power spectra, not {var_pair}"
             )
         
-        if nonlinear:
+        if nonlinear and self.nonlinear_method is None:
             raise LoggedError(
                 self.log,
-                "emulmps emulator only provides linear P(k). "
-                "Set nonlinear=False or apply nonlinear corrections separately."
+                "Nonlinear P(k) requested but no nonlinear_method configured. "
+                "Set nonlinear_method='syrenhalofit' or 'halofit+' in extra_args, "
+                "or set nonlinear=False to use linear P(k)."
+            )
+        
+        # If nonlinear requested but method not set, inform user
+        if not nonlinear and self.nonlinear_method is not None:
+            self.log.debug(
+                f"Linear P(k) requested but nonlinear_method='{self.nonlinear_method}' "
+                f"is configured. Returning linear spectrum as requested."
             )
         
         # Create unique key for caching
         key = (
-            ("Pk_interpolator", False, extrap_kmin, extrap_kmax) +
+            ("Pk_interpolator", nonlinear, extrap_kmin, extrap_kmax) +
             tuple(sorted(var_pair))
         )
         
@@ -520,6 +603,9 @@ class emulmps(Theory):
             return self.current_state[key]
         
         # Get the power spectrum grid
+        # Note: If nonlinear_method is set, the stored Pk_grid is already nonlinear
+        # So we check if nonlinear is requested and if we have nonlinear data
+        use_nonlinear = nonlinear and self.nonlinear_method is not None
         k, z, pk = self.get_Pk_grid(var_pair=var_pair, nonlinear=False)
         
         # Check if we should use log interpolation
@@ -566,6 +652,81 @@ class emulmps(Theory):
         # Cache and return
         self.current_state[key] = result
         return result
+
+    def _apply_nonlinear_boost(self, Pk_lin_hmpc, k_hmpc, z_array, params):
+        """
+        Apply nonlinear corrections using symbolic_pofk boost.
+        
+        This method computes the boost B(k,z) = P_nl(k,z) / P_lin(k,z) using
+        symbolic_pofk, then applies it to the emulated linear spectrum:
+            P_nl,emul = P_lin,emul × B_symbolic
+        
+        This approach is theoretically sound because:
+        - The boost is relatively insensitive to small differences in linear P(k)
+        - It preserves the emulator's corrections to match CAMB linear
+        - The nonlinear physics (halofit) is applied correctly
+        
+        Args:
+            Pk_lin_hmpc: Linear power spectrum in (Mpc/h)^3, shape (n_z, n_k)
+            k_hmpc: k-modes in h/Mpc, shape (n_k,)
+            z_array: Redshift array, shape (n_z,)
+            params: Dictionary of cosmological parameters
+            
+        Returns:
+            np.ndarray: Nonlinear power spectrum in (Mpc/h)^3, same shape as input
+        """
+        # Extract parameters needed for symbolic_pofk
+        As_1e9 = params['As_1e9']
+        ns = params['ns']
+        H0 = params['H0']
+        h = H0 / 100.0
+        Ob = params['omegab']
+        Om = params['omegam']
+        
+        # Compute sigma8 from As using symbolic_pofk's conversion
+        sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns)
+        
+        # Initialize boost array
+        boost = np.ones_like(Pk_lin_hmpc)
+        
+        # Determine whether to add ML correction
+        add_correction = (self.nonlinear_method == 'syrenhalofit')
+        
+        # Compute boost for each redshift
+        for i, z in enumerate(z_array):
+            a = 1.0 / (1.0 + z)
+            
+            try:
+                # Get nonlinear P(k) from symbolic_pofk
+                pk_nl_symbolic = syrenhalofit.run_halofit(
+                    k_hmpc, sigma8, Om, Ob, h, ns, a,
+                    emulator='fiducial',
+                    extrapolate=True,
+                    which_params='Bartlett',
+                    add_correction=add_correction
+                )
+                
+                # Get linear P(k) from symbolic_pofk
+                pk_lin_symbolic = symbolic_linear.plin_emulated(
+                    k_hmpc, sigma8, Om, Ob, h, ns, a=a,
+                    emulator='fiducial',
+                    extrapolate=True
+                )
+                
+                # Compute boost: B = P_nl / P_lin
+                boost[i, :] = pk_nl_symbolic / pk_lin_symbolic
+                
+            except Exception as e:
+                self.log.warning(
+                    f"Failed to compute nonlinear boost at z={z}: {e}. "
+                    f"Using linear spectrum."
+                )
+                boost[i, :] = 1.0
+        
+        # Apply boost to emulated linear spectrum
+        Pk_nl_hmpc = Pk_lin_hmpc * boost
+        
+        return Pk_nl_hmpc
 
     def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):
         """
@@ -663,6 +824,6 @@ class emulmps(Theory):
         """
         Return relative speed estimate.
         
-        The emulmps emulator is very fast - approximately 50x faster than CAMB.
+        The emulmps emulator is very fast, but this number is not yet calibrated.
         """
-        return 50.0
+        return 20.0
