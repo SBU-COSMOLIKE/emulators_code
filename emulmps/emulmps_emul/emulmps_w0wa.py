@@ -55,16 +55,24 @@ class PkEmulator:
     #VM BEGINS
     #N_K_MODES = 2400    # Number of k-modes in the output spectrum
     N_K_MODES = 240
-    K_MODES = np.logspace(-5, 2, N_K_MODES)
+    K_MODES = np.logspace(-5.1, 2, N_K_MODES)
     #VM ENDS
 
+    #VM BEGINS
+    #Z_MODES = np.concatenate((
+    #    np.linspace(0, 2, 100, endpoint=False),
+    #    np.linspace(2, 10, 10, endpoint=False),
+    #    np.linspace(10, 50, 12)
+    #))
     Z_MODES = np.concatenate((
-        np.linspace(0, 2, 100, endpoint=False),
+        np.linspace(0, 2,  30, endpoint=False),
         np.linspace(2, 10, 10, endpoint=False),
         np.linspace(10, 50, 12)
     ))
+    #VM ENDS
     N_ZS = len(Z_MODES)
     
+
     def __init__(self, base_model_path: str = "models", metadata_path: str = "metadata", num_batches: int = 10):
         """Initializes the emulator by loading all necessary models and metadata."""
         
@@ -94,11 +102,12 @@ class PkEmulator:
             # Load the 122 PCA and Scaler objects
             self.PCAS: Dict[float, PCA] = {}
             self.SCALERS: Dict[float, StandardScaler] = {}
-            for z in self.Z_MODES:
-                z_key = float(f"{z:.3f}")
-                self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
-                self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
-
+            #VM BEGINS
+            #for z in self.Z_MODES:
+            #    z_key = float(f"{z:.3f}")
+            #    self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
+            #    self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
+            #VM ENDS
             logging.info("[PkEmulator] All models and metadata loaded successfully.")
 
         except FileNotFoundError as e:

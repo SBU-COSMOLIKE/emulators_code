@@ -2,8 +2,27 @@ import numpy as np
 import warnings
 import scipy.integrate
 from colossus.cosmology import cosmology
+#VM BEGINS
+from functools import lru_cache
 
-
+@lru_cache(maxsize=None)
+def kk_grid(n=200, kmin=1e-7, kmax=1e5):
+    b0 = np.log(kmin)
+    b1 = np.log(kmax)
+    return np.exp(np.linspace(b0, b1, n))
+@lru_cache(maxsize=None)
+def W_tophat(R=8.0, n=300, kmin=1e-7, kmax=1e5):
+    kk = kk_grid(n=n, kmin=kmin, kmax=kmax)
+    x = kk * R
+    W = np.empty_like(x)
+    m = x < 1e-3
+    W[m] = 1.0
+    xm = x[~m]
+    W[~m] = 3.0 * (np.sin(xm) - xm * np.cos(xm)) / (xm**3)
+    # prevent accidental in-place modification of the cached array
+    W.setflags(write=False)
+    return W
+#VM ENDS
 
 def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_norm=True):
     """
@@ -42,44 +61,65 @@ def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_no
         ombh2 = Ob * h**2
         theta2p7 = 2.7255 / 2.7  # Assuming Tcmb0 = 2.7255 Kelvin
 
+        #VM BEGINS
+        # Compute scale factor s, alphaGamma, and effective shape Gamma
+        s = 44.5 * np.log(9.83 / om0h2) / np.sqrt(1.0 + 10.0 * ombh2**0.75)
+        alphaGamma = 1.0 - 0.328 * np.log(431.0 * om0h2) * ombom0 + \
+            0.38 * np.log(22.3 * om0h2) * ombom0**2
+        #VM ENDS
         def get_pk(kk, Anorm):
-
+            #VM BEGINS
             # Compute scale factor s, alphaGamma, and effective shape Gamma
-            s = 44.5 * np.log(9.83 / om0h2) / np.sqrt(1.0 + 10.0 * ombh2**0.75)
-            alphaGamma = 1.0 - 0.328 * np.log(431.0 * om0h2) * ombom0 + \
-                0.38 * np.log(22.3 * om0h2) * ombom0**2
+            #s = 44.5 * np.log(9.83 / om0h2) / np.sqrt(1.0 + 10.0 * ombh2**0.75)
+            #alphaGamma = 1.0 - 0.328 * np.log(431.0 * om0h2) * ombom0 + \
+            #    0.38 * np.log(22.3 * om0h2) * ombom0**2
+            #VM ENDS
             Gamma = Om * h * (alphaGamma + (1.0 - alphaGamma) /
                               (1.0 + (0.43 * kk * h * s)**4))
-
             # Compute q, C0, L0, and tk_eh
             q = kk * theta2p7**2 / Gamma
             C0 = 14.2 + 731.0 / (1.0 + 62.5 * q)
-            L0 = np.log(2.0 * np.exp(1.0) + 1.8 * q)
+            #VM BEGINS
+            #L0 = np.log(2.0 * np.exp(1.0) + 1.8 * q)
+            L0 = np.log(2.0 * np.e + 1.8 * q)
+            #VM ENDS
             tk_eh = L0 / (L0 + C0 * q**2)
-
             # Calculate Pk with unit amplitude
             return Anorm * tk_eh**2 * kk**ns
-
-        # Define integration bounds and number of sub-intervals
-        b0 = np.log(1e-7)  # ln(k_min)
-        b1 = np.log(1e5)  # ln(k_max)
-        # Number of sub-intervals (make sure it's even for Simpson's Rule)
-        n = 1000
-
+        #VM BEGINS
+        #Define integration bounds and number of sub-intervals
+        #b0 = np.log(1e-7)  # ln(k_min)
+        #b1 = np.log(1e5)  # ln(k_max)
+        #n = 1000 # Number of sub-intervals (make sure it's even for Simpson's Rule) 
+        #kk = np.exp(np.linspace(b0, b1, n))
+        n = 300
+        kmin=1e-7
+        kmax=1e5
+        kk = kk_grid(n=n, kmin=kmin, kmax=kmax).copy()
+        #VM ENDS
         # Find normalisation
         R = 8.0
-        kk = np.exp(np.linspace(b0, b1, n))
         x = kk * R
-        W = np.zeros(x.shape)
-        m = x < 1.e-3
-        W[m] = 1.0
-        W[~m] = 3.0 / x[~m]**3 * (np.sin(x[~m]) - x[~m] * np.cos(x[~m]))
-        y = get_pk(kk, 1.0) * W**2 * kk**3
-        sigma2 = scipy.integrate.simpson(y, x=np.log(x))
-
-        sigmaExact = np.sqrt(sigma2 / (2.0 * np.pi**2))
-        Anorm = (sigma8 / sigmaExact)**2
-
+        #VM BEGINS
+        #W = np.zeros(x.shape)
+        #m = x < 1.e-3
+        #W[m] = 1.0
+        #W[~m] = 3.0 / x[~m]**3 * (np.sin(x[~m]) - x[~m] * np.cos(x[~m]))
+        # y = get_pk(kk, 1.0) * W**2 * kk**3
+        W = W_tophat(R=R, n=n, kmin=kmin, kmax=kmax).copy()
+        W2  = np.square(W)
+        kk2 = kk * kk
+        kk3 = kk2 * kk
+        y = get_pk(kk, 1.0) * W2 * kk3
+        #VM ENDS
+        #VM BEGINS
+        #sigma2 = scipy.integrate.simpson(y, x=np.log(x))
+        #sigmaExact = np.sqrt(sigma2/(2.0*np.pi*np.pi))
+        #Anorm = (sigma8 / sigmaExact)**2
+        dlogx = np.diff(np.log(x))
+        sigma2 = np.sum(0.5 * (y[1:] + y[:-1]) * dlogx)
+        Anorm = sigma8*sigma8/(sigma2/(2.0*np.pi*np.pi))
+        #VM ENDS
         pk_eh = get_pk(k, Anorm)
     else:
         As = sigma8_to_As(sigma8, Om, Ob, h, ns)
@@ -112,7 +152,7 @@ def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_no
             * tk_eh ** 2
         )
 
-        #  Get fitting formula without free-streaming
+        # Get fitting formula without free-streaming
         a = 1.0
         z = 1 / a - 1
         theta2p7 = 2.7255 / 2.7  # Assuming Tcmb0 = 2.7255 Kelvin
