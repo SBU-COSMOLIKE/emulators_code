@@ -174,13 +174,14 @@ class emulbaosn(Theory):
 
         chi   = self.cumulative_simpson(zstep,func(zstep))
         zhigh = 1200 #redshift to which we are going to extend by numerical integration
-        NZEXT = 1501 #number of z bins we are going to numerically integrate in the extended region
+        NZEXT = 4501 #number of z bins we are going to numerically integrate in the extended region
         zext = np.linspace(zstep[-1], zhigh, NZEXT) #create the extended z array
         zfinal = np.concatenate((zstep, zext[1:]))
         h = params['H0']/100
         omegar = 3.612711417813115e-05/h/h
         H_ext = params['H0']*np.sqrt(params['omegam']*(1+zext)**3+omegar*(1+zext)**4) #this is an approximation
-
+        #omegal = 1-params['omegam']-omegar
+        #H_ext = state["H_interp"](zstep[-1])*np.sqrt(params['omegam']*(1+zext)**3+omegar*(1+zext)**4+omegal)/np.sqrt(params['omegam']*(1+zstep[-1])**3+omegar*(1+zstep[-1])**4+omegal)
         chi_ext = self.cumulative_simpson(zext, 2.99792458e5/H_ext)+chi[-1]
         chi_final = np.concatenate((chi, chi_ext[1:]))
         if 'omk' in params:
