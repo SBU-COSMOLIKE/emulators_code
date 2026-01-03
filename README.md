@@ -93,3 +93,18 @@ The original code we used in these three papers has only partial integration to 
         pages = "4818--4831",
         year = "2022"
     }
+
+Our Matter Power Spectrum emulator also depends on a modified version of `symbolic_pk`. We basically use the EH code with modifications we are implementing to make it faster. So please also cite
+
+    @article{Bartlett:2023cyr,
+        author = "Bartlett, Deaglan J. and Kammerer, Lukas and Kronberger, Gabriel and Desmond, Harry and Ferreira, Pedro G. and Wandelt, Benjamin D. and Burlacu, Bogdan and Alonso, David and Zennaro, Matteo",
+        title = "{A precise symbolic emulator of the linear matter power spectrum}",
+        eprint = "2311.15865",
+        archivePrefix = "arXiv",
+        primaryClass = "astro-ph.CO",
+        doi = "10.1051/0004-6361/202348811",
+        journal = "Astron. Astrophys.",
+        volume = "686",
+        pages = "A209",
+        year = "2024"
+    }
