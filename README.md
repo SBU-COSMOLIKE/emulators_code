@@ -35,6 +35,7 @@ For Supernovae luminosity distances and BAO observable emulators, we adopt ResML
 **Step :one:**: Select the 'ordering' list, which needs to be the exact sequence of parameters input to the emulator.,
 
 **Step :two:**: Select the Hubbe Parameter emulator information files as shown below
+
     'filename':   emulator model parameters and 
     'extraname': normalization factors, . 
 
