@@ -718,7 +718,7 @@ class emulmps(Theory):
         #        # Get linear P(k) from symbolic_pofk
         #        pk_lin_symbolic = symbolic_linear.plin_emulated(
         #            k_hmpc, sigma8, Om, Ob, h, ns, a=a,
-        #            emulator='fiducial',
+        #            emulator='EH',
         #            extrapolate=True
         #        )
         #        

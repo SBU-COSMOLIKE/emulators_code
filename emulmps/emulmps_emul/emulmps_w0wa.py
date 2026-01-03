@@ -126,11 +126,13 @@ class PkEmulator:
         sigma8 = As_to_sigma8(As, Om, Ob, h, ns)
         
         # Compute fiducial P(k) at z=0
+        #VM BEGINS
         pk_fid = plin_emulated(
             self.K_MODES, sigma8, Om, Ob, h, ns,
-            emulator='fiducial', extrapolate=False,
+            emulator='EH', extrapolate=False,
             kmin=self.K_MODES.min(), kmax=self.K_MODES.max()
         )
+        #VM ENDS
         
         # Compute growth factor using Colossus
         cosmo = Cosmo.setCosmology('tmp_cosmo', {

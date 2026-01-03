@@ -324,7 +324,7 @@ def logF_max_precision(k, sigma8, Om, Ob, h, ns, extrapolate=False, kmin=9.e-3, 
     return logF
 
 
-def plin_emulated(k, sigma8, Om, Ob, h, ns, a=1, emulator='fiducial',
+def plin_emulated(k, sigma8, Om, Ob, h, ns, a=1, emulator='EH',
                   extrapolate=False, kmin=9.e-3, kmax=9):
     """
     Compute the emulated linear matter power spectrum using the fits of
@@ -355,17 +355,21 @@ def plin_emulated(k, sigma8, Om, Ob, h, ns, a=1, emulator='fiducial',
     Returns:
         :pk_lin (np.ndarray): The emulated linear P(k) [(Mpc/h)^3]
     """
-
+    #VM BEGINS
     p_eh = pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, integral_norm=True)
-    if emulator == 'fiducial':
-        logF = logF_fiducial(k, sigma8, Om, Ob, h, ns,
-                             extrapolate=extrapolate, kmin=kmin, kmax=kmax)
-    elif emulator == 'max_precision':
-        logF = logF_max_precision(
-            k, sigma8, Om, Ob, h, ns, extrapolate=extrapolate, kmin=kmin, kmax=kmax)
+    if emulator == 'EH':
+        p_lin = p_eh
     else:
-        raise NotImplementedError
-    p_lin = p_eh * np.exp(logF)
+        if emulator == 'fiducial':
+            logF = logF_fiducial(k, sigma8, Om, Ob, h, ns,
+                                 extrapolate=extrapolate, kmin=kmin, kmax=kmax)
+        elif emulator == 'max_precision':
+            logF = logF_max_precision(
+                k, sigma8, Om, Ob, h, ns, extrapolate=extrapolate, kmin=kmin, kmax=kmax)
+        else:
+            raise NotImplementedError
+        p_lin = p_eh * np.exp(logF)
+    #VM ENDS
 
     if a != 1:
         # Get growth factor
