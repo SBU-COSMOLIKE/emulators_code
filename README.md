@@ -30,7 +30,20 @@ Users then need to specify the corresponding emulator, which corresponds to a sp
      
 ## SN and BAO Emulators <a name="SNBAO"></a>
 
-For Supernovae luminosity distances and BAO observable emulators, we adopt ResMLP for luminosity distance and Hubble parameter. On top of that, we have a Gaussian processing emulator for $r_{drag}$. The users again need to specify the emulator parameter, normalization factor file, and the corresponding PCA transformation matrix file directories. The specific redshift z grid file is also required. Furthermore, we have a parameter named 'dllevel' which refers to a possible artificial shift to the dataset for distance emulators, which is due to the fact that we need to lift all data points above 0 when there are negative distances for negative redshift during training (for the sake of better interpolation). Thus, we can take the logarithm of the distance to better emulate this function.
+For Supernovae luminosity distances and BAO observable emulators, we adopt ResMLP for luminosity distance and Hubble parameter. On top of that, we have a Gaussian processing emulator for $r_{drag}$. The users again need to specify the emulator parameter, normalization factor file, and the corresponding PCA transformation matrix file directories. The specific redshift z grid file is also required. Furthermore, we have a parameter named 'offset' which refers to a possible artificial shift to the dataset for distance emulators, which is due to the fact that we need to lift all data points above 0 when there are negative distances for negative redshift during training (for the sake of better interpolation). Thus, we can take the logarithm of the distance to better emulate this function.
+
+**Step :one:**: Select the 'ordering' list, which needs to be the exact sequence of parameters input to the emulator.,
+
+**Step :two:**: Select the Hubbe Parameter emulator information files as shown below
+
+    'filename':   emulator model parameters and 
+    'extraname': normalization factors, . 
+
+**Step :three:**: Specify `z` arrays for both H and distance, which are the redshift arrays on which the emulator will compute the data vector. Internally, we then save an interpolator to output values of H and distance at any redshift within the range.
+
+**Step :four:**: Internally integrate to get the supernovae distance based on the output of Hubble emulator
+
+**Step :five:**: Similarly specify the 'filename' and 'extraname' for the GP for $r_{drag}$ for BAO likelihoods.
 
 # Credits <a name="appendix_proper_credits"></a>
 
