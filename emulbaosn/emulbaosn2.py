@@ -168,7 +168,7 @@ class emulbaosn():
         zstep = np.linspace(0.0, self.z[0][-1], 2*len(self.z[0])+1)
         chi   = self.cumulative_simpson(zstep,func(zstep))#*(1 + zstep)
         zhigh = 1200 #redshift to which we are going to extend by numerical integration
-        NZEXT = 1501 #number of z bins we are going to numerically integrate in the extended region
+        NZEXT = 4501 #number of z bins we are going to numerically integrate in the extended region
         zext = np.linspace(zstep[-1], zhigh, NZEXT) #create the extended z array
         zfinal = np.concatenate((zstep, zext[1:]))
         h = params['H0']/100
