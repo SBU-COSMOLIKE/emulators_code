@@ -52,8 +52,11 @@ class PkEmulator:
 
     # --- Configuration Constants (Class Attributes) ---
     N_PCS = 22          # Number of k-space PCs per redshift
-    N_K_MODES = 2400    # Number of k-modes in the output spectrum
+    #VM BEGINS
+    #N_K_MODES = 2400    # Number of k-modes in the output spectrum
+    N_K_MODES = 240
     K_MODES = np.logspace(-5, 2, N_K_MODES)
+    #VM ENDS
 
     Z_MODES = np.concatenate((
         np.linspace(0, 2, 100, endpoint=False),
@@ -195,13 +198,16 @@ class PkEmulator:
         x_norm = self.param_scaler.transform(np.array(params).reshape(1, -1))
         
         # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
-        frac = self._predict_fracs_all_z(x_norm)
+        #VM BEGINS
+        #frac = self._predict_fracs_all_z(x_norm)
 
         # Compute MPS approximation (shape N_ZS, N_K_MODES)
         pk_mps = self._compute_mps_approximation(np.array(params))
 
         # Full emulated P(k, z)
-        pks = frac * pk_mps
+        #pks = frac * pk_mps
+        pks = pk_mps
+        #VM ENDS
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks

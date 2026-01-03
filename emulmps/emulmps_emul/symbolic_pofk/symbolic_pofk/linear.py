@@ -81,7 +81,6 @@ def pk_EisensteinHu_zb(k, sigma8, Om, Ob, h, ns, use_colossus=False, integral_no
         Anorm = (sigma8 / sigmaExact)**2
 
         pk_eh = get_pk(k, Anorm)
-
     else:
         As = sigma8_to_As(sigma8, Om, Ob, h, ns)
 

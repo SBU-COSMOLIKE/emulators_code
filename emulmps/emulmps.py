@@ -469,10 +469,12 @@ class emulmps(Theory):
             h = params['H0'] / 100.0
             
             # Convert k: h/Mpc -> 1/Mpc
-            k_mpc = k_hmpc / h
+            #k_mpc = k_hmpc / h
+            k_mpc = k_hmpc * h
             
             # Convert Pk: (Mpc/h)^3 -> Mpc^3
-            Pk_lin_mpc = Pk_lin_hmpc * h**3
+            #Pk_lin_mpc = Pk_lin_hmpc * h**3
+            Pk_lin_mpc = Pk_lin_hmpc / h**3
             
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
@@ -700,38 +702,39 @@ class emulmps(Theory):
         add_correction = (self.nonlinear_method == 'syrenhalofit')
         
         # Compute boost for each redshift
-        for i, z in enumerate(z_array):
-            a = 1.0 / (1.0 + z)
-            
-            try:
-                # Get nonlinear P(k) from symbolic_pofk
-                pk_nl_symbolic = syrenhalofit.run_halofit(
-                    k_hmpc, sigma8, Om, Ob, h, ns, a,
-                    emulator='fiducial',
-                    extrapolate=True,
-                    which_params='Bartlett',
-                    add_correction=add_correction
-                )
-                
-                # Get linear P(k) from symbolic_pofk
-                pk_lin_symbolic = symbolic_linear.plin_emulated(
-                    k_hmpc, sigma8, Om, Ob, h, ns, a=a,
-                    emulator='fiducial',
-                    extrapolate=True
-                )
-                
-                # Compute boost: B = P_nl / P_lin
-                boost[i, :] = pk_nl_symbolic / pk_lin_symbolic
-                
-            except Exception as e:
-                self.log.warning(
-                    f"Failed to compute nonlinear boost at z={z}: {e}. "
-                    f"Using linear spectrum."
-                )
-                boost[i, :] = 1.0
-        
+        #for i, z in enumerate(z_array):
+        #    a = 1.0 / (1.0 + z)
+        # 
+        #     try:
+        #        # Get nonlinear P(k) from symbolic_pofk
+        #        pk_nl_symbolic = syrenhalofit.run_halofit(
+        #            k_hmpc, sigma8, Om, Ob, h, ns, a,
+        #            emulator='fiducial',
+        #            extrapolate=True,
+        #            which_params='Bartlett',
+        #            add_correction=add_correction
+        #        )
+        #        
+        #        # Get linear P(k) from symbolic_pofk
+        #        pk_lin_symbolic = symbolic_linear.plin_emulated(
+        #            k_hmpc, sigma8, Om, Ob, h, ns, a=a,
+        #            emulator='fiducial',
+        #            extrapolate=True
+        #        )
+        #        
+        #        # Compute boost: B = P_nl / P_lin
+        #        boost[i, :] = pk_nl_symbolic / pk_lin_symbolic
+        #        
+        #    except Exception as e:
+        #        self.log.warning(
+        #            f"Failed to compute nonlinear boost at z={z}: {e}. "
+        #            f"Using linear spectrum."
+        #        )
+        #        boost[i, :] = 1.0
+        #
         # Apply boost to emulated linear spectrum
-        Pk_nl_hmpc = Pk_lin_hmpc * boost
+        #Pk_nl_hmpc = Pk_lin_hmpc * boost
+        Pk_nl_hmpc = Pk_lin_hmpc
         
         return Pk_nl_hmpc
 
