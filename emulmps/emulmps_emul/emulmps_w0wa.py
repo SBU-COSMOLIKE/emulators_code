@@ -1,4 +1,4 @@
-# Author: Victoria Lloyd (2025)
+# Author: Victoria Lloyd (2025) & V. Miranda
 import os
 import numpy as np
 import joblib
@@ -28,7 +28,7 @@ try:
     from tensorflow import keras
     from colossus.cosmology import cosmology as Cosmo
     # Issues installing symbolic_pofk as a package, including a local copy in the emulator
-    import sys; sys.path.insert(0, f"{ROOT}/symbolic_pofk"); from symbolic_pofk.linear import As_to_sigma8, plin_emulated
+    import sys; sys.path.insert(0, f"{ROOT}/symbolic_pofk"); from symbolic_pofk.linear import plin_emulated, get_approximate_D, growth_correction_R
     
     _DEPENDENCIES_LOADED = True
 except ImportError as e:
@@ -130,33 +130,20 @@ class PkEmulator:
         # Destructure parameters (clearer than indexing)
         As, ns, H0_in, Ob, Om, w0, wa = params
         h = H0_in / 100.0 # Convert H0 to h
-
-        # Compute dependent parameter (sigma8)
-        sigma8 = As_to_sigma8(As, Om, Ob, h, ns)
-        
         # Compute fiducial P(k) at z=0
-        #VM BEGINS
-        pk_fid = plin_emulated(
-            self.K_MODES, sigma8, Om, Ob, h, ns,
-            emulator='EH', extrapolate=False,
-            kmin=self.K_MODES.min(), kmax=self.K_MODES.max()
-        )
-        #VM ENDS
-        
-        # Compute growth factor using Colossus
-        cosmo = Cosmo.setCosmology('tmp_cosmo', {
-            'flat': True, 'H0': H0_in, 'Om0': Om,
-            'Ob0': Ob, 'sigma8': sigma8, 'ns': ns},
-            persistence=''
-        )
-        D0 = cosmo.growthFactor(0.0)
-        Dz = cosmo.growthFactor(self.Z_MODES)
-        growth_factors = (Dz / D0) ** 2
-        
-        # Apply growth factors and return
-        # pk_fid[None, :] ensures broadcasting works cleanly: (1, K) * (Z, 1) = (Z, K)
+        pk_fid = plin_emulated(self.K_MODES, Om, Ob, h, ns, As=As, w0=w0, wa=wa)
+        a_array = 1.0/(self.Z_MODES + 1)
+        D0 = get_approximate_D(k=1e-4, As=As, Om=Om, Ob=Ob, h=h, 
+                               ns=ns, mnu=0.06, w0=w0, wa=wa, a=1)
+        Dz = get_approximate_D(k=1e-4, As=As, Om=Om, Ob=Ob, h=h, 
+                               ns=ns, mnu=0.06, w0=w0, wa=wa, a=a_array)
+        R0 = growth_correction_R(As=As, Om=Om, Ob=Ob, h=h, 
+                                 ns=ns, mnu=0.06, w0=w0, wa=wa, a=1)
+        Rz = growth_correction_R(As=As, Om=Om, Ob=Ob, h=h, 
+                                 ns=ns, mnu=0.06, w0=w0, wa=wa, a=a_array)
+        growth_factors = (Dz/D0)*(Dz/D0)*(Rz/R0)
+        # pk_fid[None, :] broadcasting works cleanly: (1, K) * (Z, 1) = (Z, K)
         return pk_fid[None, :] * growth_factors[:, None]
-
 
     def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
         """
@@ -240,25 +227,11 @@ def get_pks(params: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     It calls the get_pks method of the globally-instantiated PkEmulator object.
     
     Args:
-        params: List or 1D array of 5 cosmological parameters, [10^9 A_s, ns, H0, Ob, Om].
+        params: List or 1D array of cosmo paras, [10^9 A_s, ns, H0, Ob, Om, w0, wa].
             
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: (k_modes, z_modes, P(k,z)).
     """
     if _pk_emulator_instance is None:
         raise RuntimeError("PkEmulator is not loaded. Check prior error messages regarding dependencies or files.")
-        
     return _pk_emulator_instance.get_pks(params)
-
-
-# Example Usage:
-# import fastMPS
-# k_modes, z_modes, pks_pred = pk_emulator.get_pks([3.0e-9, 0.965, 67.5, 0.048, 0.31])
-
-# Example Usage:
-# import fastMPS.fastMPS_w0wa as fastMPS_emul
-# k_modes, z_modes, pks_pred = fastMPS_emul.get_pks([2.1, 0.965, 67.5, 0.048, 0.31, -1.0, 0.0])
-
-# # Example Usage:
-# # import fastMPS
-# # k_modes, z_modes, pks_pred = fastMPS.get_pks([3.0e-9, 0.965, 67.5, 0.048, 0.31])

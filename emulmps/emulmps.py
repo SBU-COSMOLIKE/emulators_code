@@ -10,7 +10,7 @@ By default, both linear and nonlinear P(k) are computed (using halofit+).
 
 Supports LCDM, wCDM, and w0waCDM cosmologies.
 
-Author: Victoria Lloyd
+Author: Victoria Lloyd & V. Miranda
 Date: 2025
 """
 
@@ -696,12 +696,13 @@ class emulmps(Theory):
         h = H0 / 100.0
         Ob = params['omegab']
         Om = params['omegam']
+        w0 = params['w']
+        wa = params['wa']
         a_array = 1.0 / (1.0 + z_array)
 
         # Compute sigma8 from As using symbolic_pofk's conversion
-        sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns)
+        sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns, 0.06, w0, wa)
                         
-        #VM BEGINS
         boost = run_halofit_vec(
             k_hmpc, sigma8, Om, Ob, h, ns, a_array,
             which_params='Takahashi',
@@ -709,7 +710,6 @@ class emulmps(Theory):
             return_boost=True,
             Plin_in=Pk_lin_hmpc,   # (nz, nk)
         )
-        #VM ENDS
         Pk_nl_hmpc = Pk_lin_hmpc * boost
         return Pk_nl_hmpc
 

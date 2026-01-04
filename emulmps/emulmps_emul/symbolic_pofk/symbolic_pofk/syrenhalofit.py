@@ -146,8 +146,7 @@ def A_emulated(k, sigma8, Om, Ob, h, ns, a, ksigma=None, neff=None, C=None):
 
 #VM BEGINS
 def run_halofit(k, sigma8, Om, Ob, h, ns, a, emulator='EH', 
-                extrapolate=False, which_params='Takahashi', 
-#                add_correction=True):
+                extrapolate=False, which_params='Takahashi',
                 add_correction=False, return_boost=False, Plin_in = None):
 #VM ENDS
     """
