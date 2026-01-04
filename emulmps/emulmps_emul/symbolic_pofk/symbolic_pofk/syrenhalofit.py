@@ -251,7 +251,6 @@ def run_halofit(k, sigma8, Om, Ob, h, ns, a, emulator='EH',
     else:
         return p_nl
 
-
 #VM BEGINS
 _TWO_PI2 = 2.0 * np.pi**2
 
@@ -278,18 +277,6 @@ _PARS_TAKAHASHI = np.array([
     1.2490, 0.3980, -0.1682
 ], dtype=np.float64)
 
-_PARS_BARTLETT = np.array([
-    1.5358,  2.8533,  2.3692,  0.9916,  0.2244,  0.5862, -0.565,   0.5871,
-    0.5757, -1.505,   0.3913,  2.0252,  0.7971,  0.5989,  0.2216, -0.001,
-    1.1771,  5.2082,  3.7324, -0.0158, -0.0972,  0.155,   6.1043,  1.3408,
-   -0.2138, -5.325,   1.9967, -0.7176,  0.3108,  1.2477,  0.4018, -0.3837,
-], dtype=np.float64)
-
-_D_A = np.array([
-    0.0, 0.2011, 1.2983, 16.8733, 3.6428, 1.0622, 0.1023, 2.2204,
-    0.0105, 0.487, 0.6151, 0.3377, 3.315, 3.9819, 1.3572, 3.3259,
-    0.3872, 4.1175, 2.6795, 5.3394, 0.0338
-], dtype=np.float64)
 
 def ksigma_emulated_vec(sigma8, Om, Ob, h, ns, a):
     a = np.asarray(a, dtype=np.float64)
@@ -327,51 +314,14 @@ def C_emulated_vec(sigma8, Om, Ob, h, ns, a):
     )
     #VM ENDS
 
-def A_emulated_vec(k, sigma8, Om, Ob, h, ns, a, ksigma=None, neff=None, C=None):
-    k = np.asarray(k, dtype=np.float64)
-    a = np.asarray(a, dtype=np.float64)
-
-    if ksigma is None:
-        ksigma = ksigma_emulated_vec(sigma8, Om, Ob, h, ns, a)  # (nz,)
-    if neff is None:
-        neff = neff_emulated_vec(sigma8, Om, Ob, h, ns, a)      # (nz,)
-    if C is None:
-        C = C_emulated_vec(sigma8, Om, Ob, h, ns, a)            # (nz,)
-
-    y = k[None, :] / ksigma[:, None]  # (nz, nk)
-    d = _D_A
-
-    ne = neff[:, None]
-    Ce = C[:, None]
-
-    A = (
-        d[0]
-        - d[1] / np.sqrt(1.0 + (d[2] * y) ** (-d[3] * Ce))
-          * (
-              y
-              - d[4] * (y - d[5] * ns) / np.sqrt((y - d[6] * np.log(d[7] * Ce)) ** 2 + d[8])
-              + d[9] * ne / np.sqrt(d[10] + sigma8 ** 2)
-                / np.sqrt((d[11] * y - np.cos(d[12] * ne)) ** 2 + 1.0)
-              + (d[13] + d[14] * ne - d[15] * Ce - d[16] * y)
-                * (d[17] * ne + d[18] * y + np.cos(d[19] * ne))
-                / np.sqrt(y ** 2 + d[20])
-          )
-    )
-    return A
-
 def run_halofit_vec(
     k, sigma8, Om, Ob, h, ns, a_array,
-    which_params='Takahashi',
-    add_correction=False,
     return_boost=False,
     Plin_in=None,
 ):
     """
     Vectorized over a_array. If Plin_in is provided, it must be shape (nz, nk).
     Returns shape (nz, nk).
-
-    NOTE: To keep this fully vectorized, pass Plin_in. If Plin_in is None, you'd
-    need your linear emulator to accept vector a, otherwise you'd reintroduce a loop.
     """
     k = np.asarray(k, dtype=np.float64)
     a = np.asarray(a_array, dtype=np.float64)
@@ -380,22 +330,14 @@ def run_halofit_vec(
 
     nk = k.size
     nz = a.size
-
-    if which_params == 'Takahashi':
-        pars = _PARS_TAKAHASHI
-    elif which_params == 'Bartlett':
-        pars = _PARS_BARTLETT
-    else:
-        raise NotImplementedError
+    pars = _PARS_TAKAHASHI
 
     if Plin_in is None:
-        raise NotImplementedError(
-            "run_halofit_vec is loop-free only if you pass Plin_in with shape (nz, nk)."
-        )
+        raise NotImplementedError("require Plin_in with shape (nz, nk).")
 
     plin = np.asarray(Plin_in, dtype=np.float64)
     if plin.shape != (nz, nk):
-        raise ValueError(f"Plin_in must have shape (nz, nk)=({nz},{nk}), got {plin.shape}")
+        raise ValueError(f"Plin_in must have shape (nz,nk)=({nz},{nk})")
 
     # a-dependent scalars (nz,)
     ksigma = ksigma_emulated_vec(sigma8, Om, Ob, h, ns, a)
@@ -448,10 +390,6 @@ def run_halofit_vec(
     pq = plin * (1.0 + deltaL2) ** (beta[:, None]) / (1.0 + alpha[:, None] * deltaL2) * np.exp(-y / 4.0 - (y * y) / 8.0)
 
     p_nl = ph + pq
-
-    if add_correction:
-        A = A_emulated_vec(k, sigma8, Om, Ob, h, ns, a, ksigma=ksigma, neff=neff, C=Cc)
-        p_nl *= (1.0 + A)
 
     return (p_nl / plin) if return_boost else p_nl
 #VM ENDS

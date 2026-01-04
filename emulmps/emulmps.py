@@ -705,8 +705,6 @@ class emulmps(Theory):
                         
         boost = run_halofit_vec(
             k_hmpc, sigma8, Om, Ob, h, ns, a_array,
-            which_params='Takahashi',
-            add_correction=False,
             return_boost=True,
             Plin_in=Pk_lin_hmpc,   # (nz, nk)
         )
