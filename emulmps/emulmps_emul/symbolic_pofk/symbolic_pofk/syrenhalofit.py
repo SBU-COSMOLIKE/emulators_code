@@ -313,12 +313,20 @@ def neff_emulated_vec(sigma8, Om, Ob, h, ns, a):
 def C_emulated_vec(sigma8, Om, Ob, h, ns, a):
     a = np.asarray(a, dtype=np.float64)
     b = _B_C
+    #return (
+    #    b[0] * sigma8
+    #    - b[1] * np.sqrt(b[2] * ns + sigma8 * (b[3] * h + (b[4] * Om) ** (b[5] * a) - b[6]))
+    #      * (b[7] * Ob + b[8] * a + b[9] * sigma8 - (b[10] * h) ** (b[11] * Om))
+    #    - b[12]
+    #)
+    #VM BEGINS - add abs because I got NANs coming from the sqrt
     return (
         b[0] * sigma8
-        - b[1] * np.sqrt(b[2] * ns + sigma8 * (b[3] * h + (b[4] * Om) ** (b[5] * a) - b[6]))
+        - b[1] * np.sqrt(np.abs(b[2] * ns + sigma8 * (b[3] * h + (b[4] * Om) ** (b[5] * a) - b[6])))
           * (b[7] * Ob + b[8] * a + b[9] * sigma8 - (b[10] * h) ** (b[11] * Om))
         - b[12]
     )
+    #VM ENDS
 
 def A_emulated_vec(k, sigma8, Om, Ob, h, ns, a, ksigma=None, neff=None, C=None):
     k = np.asarray(k, dtype=np.float64)

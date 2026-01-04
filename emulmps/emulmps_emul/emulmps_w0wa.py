@@ -65,7 +65,7 @@ class PkEmulator:
     #    np.linspace(10, 50, 12)
     #))
     Z_MODES = np.concatenate((
-        np.linspace(0, 2,  30, endpoint=False),
+        np.linspace(0, 2,  35, endpoint=False),
         np.linspace(2, 10, 10, endpoint=False),
         np.linspace(10, 50, 12)
     ))
