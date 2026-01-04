@@ -149,7 +149,6 @@ class PkEmulator:
             'Ob0': Ob, 'sigma8': sigma8, 'ns': ns},
             persistence=''
         )
-
         D0 = cosmo.growthFactor(0.0)
         Dz = cosmo.growthFactor(self.Z_MODES)
         growth_factors = (Dz / D0) ** 2

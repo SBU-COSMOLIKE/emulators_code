@@ -35,13 +35,14 @@ try:
     # Issues installing symbolic_pofk as a package, including a local copy in the emulator
     import sys; sys.path.insert(0, f"{ROOT}/emulmps_emul/symbolic_pofk")
     from symbolic_pofk.linear import As_to_sigma8, plin_emulated
-    from symbolic_pofk.syrenhalofit import run_halofit
+    from symbolic_pofk.syrenhalofit import run_halofit, run_halofit_vec
     # Create module-level aliases for compatibility
     class symbolic_linear:
         As_to_sigma8 = As_to_sigma8
         plin_emulated = plin_emulated
     class syrenhalofit:
         run_halofit = run_halofit
+        run_halofit_vec = run_halofit_vec
     SYMBOLIC_POFK_AVAILABLE = True
 except ImportError as e:
     logging.error(f"ERROR: A required dependency could not be imported. Please ensure all dependencies are installed.")
@@ -475,7 +476,7 @@ class emulmps(Theory):
             # Convert Pk: (Mpc/h)^3 -> Mpc^3
             #Pk_lin_mpc = Pk_lin_hmpc * h**3
             Pk_lin_mpc = Pk_lin_hmpc / h**3
-            
+    
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
             state[("Pk_grid", False, "delta_tot", "delta_tot")] = (
@@ -484,7 +485,10 @@ class emulmps(Theory):
             
             # Store NONLINEAR P(k) if computed
             if Pk_nl_hmpc is not None:
-                Pk_nl_mpc = Pk_nl_hmpc * h**3
+                #VM BEGINS
+                #Pk_nl_mpc = Pk_nl_hmpc * h**3
+                Pk_nl_mpc = Pk_nl_hmpc / h**3
+                #VM ENDS
                 state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
                     k_mpc, z_array, Pk_nl_mpc
                 )
@@ -667,7 +671,7 @@ class emulmps(Theory):
         self.current_state[key] = result
         return result
 
-    def _apply_nonlinear_boost(self, Pk_lin_hmpc, k_hmpc, z_array, params):
+    def _apply_nonlinear_boost(self, Pk_lin_hmpc, k_hmpc, z_array, params, emulator='EH'):
         """
         Apply nonlinear corrections using symbolic_pofk boost.
         
@@ -691,51 +695,21 @@ class emulmps(Theory):
         h = H0 / 100.0
         Ob = params['omegab']
         Om = params['omegam']
-        
+        a_array = 1.0 / (1.0 + z_array)
+
         # Compute sigma8 from As using symbolic_pofk's conversion
         sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns)
-        
-        # Initialize boost array
-        boost = np.ones_like(Pk_lin_hmpc)
-        
-        # Determine whether to add ML correction
-        add_correction = (self.nonlinear_method == 'syrenhalofit')
-        
-        # Compute boost for each redshift
-        #for i, z in enumerate(z_array):
-        #    a = 1.0 / (1.0 + z)
-        # 
-        #     try:
-        #        # Get nonlinear P(k) from symbolic_pofk
-        #        pk_nl_symbolic = syrenhalofit.run_halofit(
-        #            k_hmpc, sigma8, Om, Ob, h, ns, a,
-        #            emulator='fiducial',
-        #            extrapolate=True,
-        #            which_params='Bartlett',
-        #            add_correction=add_correction
-        #        )
-        #        
-        #        # Get linear P(k) from symbolic_pofk
-        #        pk_lin_symbolic = symbolic_linear.plin_emulated(
-        #            k_hmpc, sigma8, Om, Ob, h, ns, a=a,
-        #            emulator='EH',
-        #            extrapolate=True
-        #        )
-        #        
-        #        # Compute boost: B = P_nl / P_lin
-        #        boost[i, :] = pk_nl_symbolic / pk_lin_symbolic
-        #        
-        #    except Exception as e:
-        #        self.log.warning(
-        #            f"Failed to compute nonlinear boost at z={z}: {e}. "
-        #            f"Using linear spectrum."
-        #        )
-        #        boost[i, :] = 1.0
-        #
-        # Apply boost to emulated linear spectrum
-        #Pk_nl_hmpc = Pk_lin_hmpc * boost
-        Pk_nl_hmpc = Pk_lin_hmpc
-        
+                        
+        #VM BEGINS
+        boost = run_halofit_vec(
+            k_hmpc, sigma8, Om, Ob, h, ns, a_array,
+            which_params='Takahashi',
+            add_correction=False,
+            return_boost=True,
+            Plin_in=Pk_lin_hmpc,   # (nz, nk)
+        )
+        #VM ENDS
+        Pk_nl_hmpc = Pk_lin_hmpc * boost
         return Pk_nl_hmpc
 
     def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):

@@ -410,7 +410,6 @@ def plin_emulated(k, sigma8, Om, Ob, h, ns, a=1, emulator='EH',
             raise NotImplementedError
         p_lin = p_eh * np.exp(logF)
     #VM ENDS
-
     if a != 1:
         # Get growth factor
         cosmo_params = {
@@ -423,12 +422,8 @@ def plin_emulated(k, sigma8, Om, Ob, h, ns, a=1, emulator='EH',
         }
         cosmo = cosmology.setCosmology('myCosmo', **cosmo_params)
         D = cosmo.growthFactor(1/a - 1)
-
-        # Linear P(k) at z
-        p_lin *= D ** 2
-
+        p_lin *= D ** 2 # Linear P(k) at z
     return p_lin
-
 
 def sigma8_to_As(sigma8, Om, Ob, h, ns, old_equation=False):
     """
