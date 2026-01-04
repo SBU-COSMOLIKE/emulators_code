@@ -460,7 +460,6 @@ def sigma8_to_As(sigma8, Om, Ob, h, ns, old_equation=False):
             )
         )
         As = (sigma8 / f) ** 2
-
     return As
 
 
@@ -501,5 +500,4 @@ def As_to_sigma8(As, Om, Ob, h, ns, old_equation=False):
             )
         )
         sigma8 = f * np.sqrt(As)
-
     return sigma8

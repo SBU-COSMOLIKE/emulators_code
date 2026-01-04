@@ -469,6 +469,7 @@ class emulmps(Theory):
             # Extract h from H0
             h = params['H0'] / 100.0
             
+            # VM BEGINS
             # Convert k: h/Mpc -> 1/Mpc
             #k_mpc = k_hmpc / h
             k_mpc = k_hmpc * h
@@ -476,7 +477,8 @@ class emulmps(Theory):
             # Convert Pk: (Mpc/h)^3 -> Mpc^3
             #Pk_lin_mpc = Pk_lin_hmpc * h**3
             Pk_lin_mpc = Pk_lin_hmpc / h**3
-    
+            # VM ENDS
+
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
             state[("Pk_grid", False, "delta_tot", "delta_tot")] = (
@@ -495,9 +497,9 @@ class emulmps(Theory):
             
             # Also store in simple format for backward compatibility (linear)
             state["Pk_grid"] = {
-                'k': k_mpc,          # Shape: (2400,), in 1/Mpc
-                'z': z_array,        # Shape: (122,)
-                'Pk': Pk_lin_mpc     # Shape: (122, 2400), in Mpc^3 (LINEAR)
+                'k': k_mpc,          # Shape: (nk,), in 1/Mpc
+                'z': z_array,        # Shape: (nz,)
+                'Pk': Pk_lin_mpc     # Shape: (nz, nk), in Mpc^3 (LINEAR)
             }
             
             # Optionally compute and store derived parameters
@@ -509,7 +511,6 @@ class emulmps(Theory):
                     derived['sigma8'] = self._compute_sigma8(
                         Pk_lin_hmpc, k_hmpc, z_array, z=0.0
                     )
-                
                 state["derived"] = derived
             
             # Return True to indicate successful calculation
@@ -764,7 +765,6 @@ class emulmps(Theory):
         # Trapezoidal rule
         sigma8_squared = np.trapz(integrand_logk, log_k)
         sigma8 = np.sqrt(sigma8_squared)
-        
         return sigma8
 
     def get_can_support_params(self):
