@@ -258,11 +258,13 @@ class emulmps(Theory):
         extra_args: Configuration dictionary
             - param_order: List of parameter names (see initialize())
             - nonlinear_method: Nonlinear correction method (default: 'halofit+')
+            - use_syren: If True, bypass emulator and use symbolic approx only (default: False)
         
         # Runtime attributes
         req: Dictionary of required parameters
         param_order: List of parameter names in the order expected by emulator
         nonlinear_method: Nonlinear correction method
+        use_syren: Flag controlling emulator mode
     """
     
     # Class-level attributes required by Cobaya
@@ -282,6 +284,8 @@ class emulmps(Theory):
             - 'param_order': List of parameter names in order
               Default: ["As_1e9", "ns", "H0", "omegab", "omegam", "w0", "wa"]
             - 'nonlinear_method': Nonlinear method (default: 'halofit+')
+            - 'use_syren': If True, bypass emulator corrections and use only 
+              symbolic approximation (default: False)
         
         Cosmology options:
             - LCDM: ["As_1e9", "ns", "H0", "omegab", "omegam"]
@@ -293,6 +297,10 @@ class emulmps(Theory):
         # Set defaults
         self.renames = empty_dict
         self.extra_args = getattr(self, 'extra_args', {})
+        
+        # Get use_syren flag (default: False, meaning use emulator corrections)
+        # When True, bypasses emulator and uses only symbolic approximation
+        self.use_syren = self.extra_args.get('use_syren', False)
         
         # Get nonlinear correction method
         # Default is 'halofit+' (from VM)
@@ -368,6 +376,12 @@ class emulmps(Theory):
             f"emulmps emulator initialized with {cosmo_type} cosmology"
         )
         self.log.info(f"Parameter order: {self.param_order}")
+        
+        # Log emulator mode
+        if self.use_syren:
+            self.log.info("Emulator mode: SYMBOLIC ONLY (use_syren=True, bypassing emulated corrections)")
+        else:
+            self.log.info("Emulator mode: FULL EMULATOR (using emulated corrections)")
 
     def get_requirements(self):
         """
@@ -449,7 +463,8 @@ class emulmps(Theory):
             
             # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
-            k_hmpc, z_array, Pk_lin_hmpc = get_pks(emul_params)
+            # Pass use_syren flag to control whether to apply emulator corrections
+            k_hmpc, z_array, Pk_lin_hmpc = get_pks(emul_params, use_syren=self.use_syren)
             
             # ===================================================================
             # NONLINEAR CORRECTIONS (computed by default)

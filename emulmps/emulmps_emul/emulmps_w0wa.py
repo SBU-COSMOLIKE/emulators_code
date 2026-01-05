@@ -52,25 +52,44 @@ class PkEmulator:
 
     # --- Configuration Constants (Class Attributes) ---
     N_PCS = 22          # Number of k-space PCs per redshift
-    #VM BEGINS
-    #N_K_MODES = 2400    # Number of k-modes in the output spectrum
-    N_K_MODES = 240
-    K_MODES = np.logspace(-5.1, 2, N_K_MODES)
-    #VM ENDS
-
-    #VM BEGINS
-    #Z_MODES = np.concatenate((
-    #    np.linspace(0, 2, 100, endpoint=False),
-    #    np.linspace(2, 10, 10, endpoint=False),
-    #    np.linspace(10, 50, 12)
-    #))
-    Z_MODES = np.concatenate((
-        np.linspace(0, 2,  35, endpoint=False),
-        np.linspace(2, 10, 10, endpoint=False),
-        np.linspace(10, 50, 12)
-    ))
-    #VM ENDS
-    N_ZS = len(Z_MODES)
+    
+    # Grid sizes will be set dynamically based on use_syren
+    # This is a temporary fix until emulator is retrained on smaller grid
+    N_K_MODES = None
+    K_MODES = None
+    Z_MODES = None
+    N_ZS = None
+    
+    @staticmethod
+    def _set_grid_for_mode(use_syren):
+        """
+        Set k and z grids based on use_syren flag.
+        TEMPORARY: Until emulator is retrained on smaller grid.
+        
+        Args:
+            use_syren: If True, use small grid. If False/None, use large grid.
+        """
+        if use_syren is True:
+            # Small grid for symbolic-only mode
+            N_K_MODES = 240
+            K_MODES = np.logspace(-5.1, 2, N_K_MODES)
+            Z_MODES = np.concatenate((
+                np.linspace(0, 2, 30, endpoint=False),
+                np.linspace(2, 10, 10, endpoint=False),
+                np.linspace(10, 50, 12)
+            ))
+        else:
+            # Large grid for full emulator mode
+            N_K_MODES = 2400
+            K_MODES = np.logspace(-5, 2, N_K_MODES)
+            Z_MODES = np.concatenate((
+                np.linspace(0, 2, 100, endpoint=False),
+                np.linspace(2, 10, 10, endpoint=False),
+                np.linspace(10, 50, 12)
+            ))
+        
+        N_ZS = len(Z_MODES)
+        return N_K_MODES, K_MODES, Z_MODES, N_ZS
     
 
     def __init__(self, base_model_path: str = "models", metadata_path: str = "metadata", num_batches: int = 10):
@@ -99,20 +118,46 @@ class PkEmulator:
 
             )
 
-            # Load the 122 PCA and Scaler objects
+            # Initialize empty dictionaries for PCA and Scaler objects
+            # These will be loaded lazily only if needed (use_syren=False)
             self.PCAS: Dict[float, PCA] = {}
             self.SCALERS: Dict[float, StandardScaler] = {}
-            #VM BEGINS
-            #for z in self.Z_MODES:
-            #    z_key = float(f"{z:.3f}")
-            #    self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
-            #    self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
-            #VM ENDS
-            logging.info("[PkEmulator] All models and metadata loaded successfully.")
+            self._pcas_loaded = False  # Track whether we've loaded them
+            
+            logging.info("[PkEmulator] Core models loaded successfully.")
+            logging.info("[PkEmulator] PCA/Scalers will be loaded lazily if needed.")
+
 
         except FileNotFoundError as e:
             logging.error(f"CRITICAL: Required model or metadata file not found: {e.filename}")
             logging.warning("Please ensure the 'models' and 'metadata' directories are correctly placed relative to pk_emulator.py.")
+            raise
+    
+    def _load_pcas_and_scalers(self):
+        """
+        Lazy loading of PCA and Scaler objects.
+        
+        Only loads these if they haven't been loaded yet. This is called
+        automatically by _predict_fracs_all_z() when the full emulator is used.
+        Saves ~1-2 seconds of initialization time when use_syren=True.
+        """
+        if self._pcas_loaded:
+            return  # Already loaded
+        
+        logging.info("[PkEmulator] Loading PCA and Scaler objects...")
+        
+        try:
+            for z in self.Z_MODES:
+                z_key = float(f"{z:.3f}")
+                self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
+                self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
+            
+            self._pcas_loaded = True
+            logging.info("[PkEmulator] PCA and Scaler objects loaded successfully.")
+            
+        except FileNotFoundError as e:
+            logging.error(f"CRITICAL: Required PCA/Scaler file not found: {e.filename}")
+            logging.warning("Please ensure the 'metadata' directory contains all PCA and scaler files.")
             raise
     
     def _compute_mps_approximation(self, params: np.ndarray) -> np.ndarray:
@@ -149,12 +194,18 @@ class PkEmulator:
         """
         Performs the full NN prediction and PCA reconstructions.
         
+        This method requires PCA and Scaler objects, which are loaded lazily
+        on first use to avoid unnecessary loading when use_syren=True.
+        
         Args:
             params: Normalized 2D array of parameters (1, N_params).
             
         Returns:
             np.ndarray: Final predicted log fractional differences, shape (N_ZS, N_K_MODES).
         """
+        # Ensure PCA and Scalers are loaded
+        self._load_pcas_and_scalers()
+        
         # Predict T-components
         t_comps_pred = self.model.predict(params, verbose=0)
         
@@ -180,31 +231,42 @@ class PkEmulator:
         return np.stack(reconstructed_fracs)
 
 
-    def get_pks(self, params: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def get_pks(self, params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Returns P(k, z) for all emulator redshifts for a given cosmology.
         
         Args:
             params: List or 1D array of 5 cosmological parameters.
+            use_syren: Optional flag to bypass emulator corrections.
+                      - None (default): Apply emulator corrections (full emulator)
+                      - True: Bypass emulator, return only symbolic approximation
             
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: (k_modes, z_modes, P(k,z)).
         """
+        # TEMPORARY FIX: Set grids based on use_syren flag
+        # This will be removed once emulator is retrained on smaller grid
+        if self.K_MODES is None:
+            self.N_K_MODES, self.K_MODES, self.Z_MODES, self.N_ZS = self._set_grid_for_mode(use_syren)
+        
         # Normalize cosmological parameters
         # Ensure input is a 2D array (1, N_params) for the scaler/model
         x_norm = self.param_scaler.transform(np.array(params).reshape(1, -1))
         
-        # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
-        #VM BEGINS
-        #frac = self._predict_fracs_all_z(x_norm)
-
-        # Compute MPS approximation (shape N_ZS, N_K_MODES)
+        # Compute MPS approximation (symbolic P(k) - always needed)
         pk_mps = self._compute_mps_approximation(np.array(params))
 
-        # Full emulated P(k, z)
-        #pks = frac * pk_mps
-        pks = pk_mps
-        #VM ENDS
+        # Decide whether to apply emulator corrections
+        if use_syren is True:
+            # Bypass emulator - return only symbolic approximation
+            pks = pk_mps
+        else:
+            # Default behavior: apply emulator corrections
+            # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
+            frac = self._predict_fracs_all_z(x_norm)
+            
+            # Full emulated P(k, z)
+            pks = frac * pk_mps
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks
@@ -220,7 +282,7 @@ if _DEPENDENCIES_LOADED:
     except Exception as e:
         logging.warning(f"PkEmulator instance failed during initialization: {e}")
 
-def get_pks(params: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def get_pks(params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Module-level function to get P(k, z). This is the streamlined public interface.
     
@@ -228,10 +290,13 @@ def get_pks(params: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     
     Args:
         params: List or 1D array of cosmo paras, [10^9 A_s, ns, H0, Ob, Om, w0, wa].
+        use_syren: Optional flag to bypass emulator corrections.
+                  - None (default): Apply emulator corrections (full emulator)
+                  - True: Bypass emulator, return only symbolic approximation
             
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: (k_modes, z_modes, P(k,z)).
     """
     if _pk_emulator_instance is None:
         raise RuntimeError("PkEmulator is not loaded. Check prior error messages regarding dependencies or files.")
-    return _pk_emulator_instance.get_pks(params)
+    return _pk_emulator_instance.get_pks(params, use_syren=use_syren)
