@@ -52,44 +52,16 @@ class PkEmulator:
 
     # --- Configuration Constants (Class Attributes) ---
     N_PCS = 22          # Number of k-space PCs per redshift
+    N_K_MODES = 240     # Number of k modes
     
-    # Grid sizes will be set dynamically based on use_syren
-    # This is a temporary fix until emulator is retrained on smaller grid
-    N_K_MODES = None
-    K_MODES = None
-    Z_MODES = None
-    N_ZS = None
-    
-    @staticmethod
-    def _set_grid_for_mode(use_syren):
-        """
-        Set k and z grids based on use_syren flag.
-        TEMPORARY: Until emulator is retrained on smaller grid.
-        
-        Args:
-            use_syren: If True, use small grid. If False/None, use large grid.
-        """
-        if use_syren is True:
-            # Small grid for symbolic-only mode
-            N_K_MODES = 240
-            K_MODES = np.logspace(-5.1, 2, N_K_MODES)
-            Z_MODES = np.concatenate((
-                np.linspace(0, 2, 30, endpoint=False),
-                np.linspace(2, 10, 10, endpoint=False),
-                np.linspace(10, 50, 12)
-            ))
-        else:
-            # Large grid for full emulator mode
-            N_K_MODES = 2400
-            K_MODES = np.logspace(-5, 2, N_K_MODES)
-            Z_MODES = np.concatenate((
-                np.linspace(0, 2, 100, endpoint=False),
-                np.linspace(2, 10, 10, endpoint=False),
-                np.linspace(10, 50, 12)
-            ))
-        
-        N_ZS = len(Z_MODES)
-        return N_K_MODES, K_MODES, Z_MODES, N_ZS
+    # Fixed k and z grids
+    K_MODES = np.logspace(-5.1, 2, N_K_MODES)
+    Z_MODES = np.concatenate((
+        np.linspace(0, 2, 30, endpoint=False),
+        np.linspace(2, 10, 10, endpoint=False),
+        np.linspace(10, 50, 12)
+    ))
+    N_ZS = len(Z_MODES)  # Number of redshift bins
     
 
     def __init__(self, base_model_path: str = "models", metadata_path: str = "metadata", num_batches: int = 10):
@@ -167,7 +139,7 @@ class PkEmulator:
         This function uses Colossus to calculate the growth factors.
         
         Args:
-            params: 1D array of cosmological parameters [10^9 A_s, ns, H0, Ob, Om].
+            params: 1D array of cosmological parameters [10^9 A_s, ns, H0, Ob, Om, w0, wa].
             
         Returns:
             np.ndarray: P_lin(k, z) array of shape (N_ZS, N_K_MODES).
@@ -222,7 +194,7 @@ class PkEmulator:
                 self.PCAS[float(f"{z:.3f}")].inverse_transform(
                     pcs_z.reshape(1, -1)
                 )
-            )[0] # Extract the 1D result from the (1, 2000) array
+            )[0] # Extract the 1D result from the (1, N_K_MODES) array
             for z, pcs_z in zip(self.Z_MODES, pcs_pred_z_stack)
         ]
 
@@ -230,13 +202,12 @@ class PkEmulator:
         # Resulting shape: (N_ZS, N_K_MODES)
         return np.stack(reconstructed_fracs)
 
-    def get_pks(self, params: List[float], use_syren: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
+    def get_pks(self, params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Returns P(k, z) for all emulator redshifts for a given cosmology.
         
         Args:
-            params: List or 1D array of 5 cosmological parameters.
+            params: List or 1D array of 7 cosmological parameters [10^9 A_s, ns, H0, Ob, Om, w0, wa].
             use_syren: Optional flag to bypass emulator corrections.
                       - None (default): Apply emulator corrections (full emulator)
                       - True: Bypass emulator, return only symbolic approximation
@@ -244,11 +215,6 @@ class PkEmulator:
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: (k_modes, z_modes, P(k,z)).
         """
-        # TEMPORARY FIX: Set grids based on use_syren flag
-        # This will be removed once emulator is retrained on smaller grid
-        if self.K_MODES is None:
-            self.N_K_MODES, self.K_MODES, self.Z_MODES, self.N_ZS = self._set_grid_for_mode(use_syren)
-        
         # Normalize cosmological parameters
         # Ensure input is a 2D array (1, N_params) for the scaler/model
         x_norm = self.param_scaler.transform(np.array(params).reshape(1, -1))
@@ -263,10 +229,10 @@ class PkEmulator:
         else:
             # Default behavior: apply emulator corrections
             # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
-            frac = self._predict_fracs_all_z(x_norm)
+            logfrac = self._predict_fracs_all_z(x_norm)
             
             # Full emulated P(k, z)
-            pks = frac * pk_mps
+            pks = np.exp(logfrac) * pk_mps
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks
