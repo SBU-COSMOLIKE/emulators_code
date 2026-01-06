@@ -179,7 +179,6 @@ class PkEmulator:
         # Resulting shape: (N_ZS, N_K_MODES)
         return np.stack(reconstructed_fracs)
 
-
     def get_pks(self, params: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Returns P(k, z) for all emulator redshifts for a given cosmology.
