@@ -8,9 +8,10 @@ from pathlib import Path
 import sys
 from . import train_utils_pk_emulator as utils
 sys.modules['train_utils_pk_emulator'] = utils
-# import train_utils_pk_emulator_w0wa_weighted as utils
 from . train_utils_pk_emulator import CustomActivationLayer
 from keras.losses import MeanSquaredError
+import time
+import tensorflow as tf
 
 
 # Set up logging for the module
@@ -63,7 +64,6 @@ class PkEmulator:
     ))
     N_ZS = len(Z_MODES)  # Number of redshift bins
     
-
     def __init__(self, base_model_path: str = "models", metadata_path: str = "metadata", num_batches: int = 10):
         """Initializes the emulator by loading all necessary models and metadata."""
         
@@ -87,18 +87,38 @@ class PkEmulator:
                     "CustomActivationLayer": CustomActivationLayer,
                     "mse": MeanSquaredError()
                 },
-
             )
 
+            # Create compiled inference function with XLA
+            @tf.function(jit_compile=True)
+            def compiled_inference(x):
+                return self.model(x, training=False)
+            
+            self._compiled_inference = compiled_inference
+
             # Initialize empty dictionaries for PCA and Scaler objects
-            # These will be loaded lazily only if needed (use_syren=False)
             self.PCAS: Dict[float, PCA] = {}
             self.SCALERS: Dict[float, StandardScaler] = {}
-            self._pcas_loaded = False  # Track whether we've loaded them
-            
-            logging.info("[PkEmulator] Core models loaded successfully.")
-            logging.info("[PkEmulator] PCA/Scalers will be loaded lazily if needed.")
+            self._pcas_loaded = False
 
+            # Pre-computed inverse transform matrices
+            self.INVERSE_TRANSFORM_MATRICES = None
+            self.INVERSE_TRANSFORM_OFFSETS = None
+
+            # Load PCA/Scalers
+            self._load_pcas_and_scalers()
+            
+            # Warm up both the neural network AND the compiled function
+            logging.info("[PkEmulator] Warming up neural network...")
+            dummy_params = self.param_scaler.transform(np.array([[2.0, 0.96, 67.0, 0.05, 0.3, -1.0, 0.0]], dtype=np.float32))
+            dummy_tf = tf.constant(dummy_params, dtype=tf.float32)
+            
+            # Warm up compiled function (first call triggers XLA compilation)
+            _ = self._compiled_inference(dummy_tf)
+            # Second call to ensure compilation is complete
+            _ = self._compiled_inference(dummy_tf)
+
+            logging.info("[PkEmulator] Core models loaded successfully.")
 
         except FileNotFoundError as e:
             logging.error(f"CRITICAL: Required model or metadata file not found: {e.filename}")
@@ -107,11 +127,13 @@ class PkEmulator:
     
     def _load_pcas_and_scalers(self):
         """
-        Lazy loading of PCA and Scaler objects.
+        Eager loading of PCA and Scaler objects with pre-computation of inverse transforms.
         
         Only loads these if they haven't been loaded yet. This is called
-        automatically by _predict_fracs_all_z() when the full emulator is used.
-        Saves ~1-2 seconds of initialization time when use_syren=True.
+        automatically during __init__ to pre-compute inverse transformation matrices.
+        
+        Pre-computes the combined inverse PCA + inverse scaling
+        transformation matrices for maximum performance.
         """
         if self._pcas_loaded:
             return  # Already loaded
@@ -119,13 +141,59 @@ class PkEmulator:
         logging.info("[PkEmulator] Loading PCA and Scaler objects...")
         
         try:
+            # Load individual PCA and Scaler objects
             for z in self.Z_MODES:
                 z_key = float(f"{z:.3f}")
                 self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
                 self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
             
-            self._pcas_loaded = True
             logging.info("[PkEmulator] PCA and Scaler objects loaded successfully.")
+            logging.info("[PkEmulator] Pre-computing inverse transformation matrices...")
+            
+            # Pre-compute combined inverse transformation matrices
+            # This combines: (PCs @ PCA.components_ + PCA.mean_) * std + mean
+            # Into a single matrix multiplication + offset addition
+            
+            inverse_matrices = []
+            inverse_offsets = []
+            
+            for z in self.Z_MODES:
+                z_key = float(f"{z:.3f}")
+                pca = self.PCAS[z_key]
+                scaler = self.SCALERS[z_key]
+                
+                # Get the scaling factor (handle both sklearn and custom Scaler)
+                if hasattr(scaler, 'scale_'):
+                    scale = scaler.scale_  # sklearn StandardScaler
+                    mean = scaler.mean_
+                elif hasattr(scaler, 'std'):
+                    scale = scaler.std     # Custom Scaler
+                    mean = scaler.mean
+                else:
+                    raise AttributeError(f"Scaler object has neither 'scale_' nor 'std' attribute")
+                
+                # Combined transformation matrix
+                # Shape: (N_PCS, N_K_MODES)
+                # Each row of PCA.components_ is scaled element-wise by scaler.std
+                combined_matrix = pca.components_ * scale[None, :]
+                
+                # Combined offset vector
+                # Shape: (N_K_MODES,)
+                # This is: PCA.mean_ * scaler.std + scaler.mean
+                combined_offset = pca.mean_ * scale + mean
+                
+                inverse_matrices.append(combined_matrix)
+                inverse_offsets.append(combined_offset)
+            
+            # Stack into arrays for vectorized operations
+            # Shape: (N_ZS, N_PCS, N_K_MODES)
+            self.INVERSE_TRANSFORM_MATRICES = np.stack(inverse_matrices, axis=0).astype(np.float32)
+            
+            # Shape: (N_ZS, N_K_MODES)
+            self.INVERSE_TRANSFORM_OFFSETS = np.stack(inverse_offsets, axis=0).astype(np.float32)
+            
+            self._pcas_loaded = True
+            logging.info("[PkEmulator] Inverse transformation matrices pre-computed successfully.")
             
         except FileNotFoundError as e:
             logging.error(f"CRITICAL: Required PCA/Scaler file not found: {e.filename}")
@@ -160,14 +228,16 @@ class PkEmulator:
                                  ns=ns, mnu=0.06, w0=w0, wa=wa, a=a_array)
         growth_factors = (Dz/D0)*(Dz/D0)*(Rz/R0)
         # pk_fid[None, :] broadcasting works cleanly: (1, K) * (Z, 1) = (Z, K)
-        return pk_fid[None, :] * growth_factors[:, None]
+        result = pk_fid[None, :] * growth_factors[:, None]
+        return result.astype(np.float32)
 
     def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
-        """
-        Performs the full NN prediction and PCA reconstructions.
+        """Optimized NN inference using compiled TensorFlow function.
+        Performs the full NN prediction and PCA reconstructions,
+        optimized using compiled TensorFlow function.
         
-        This method requires PCA and Scaler objects, which are loaded lazily
-        on first use to avoid unnecessary loading when use_syren=True.
+        This method requires PCA and Scaler objects, which are loaded
+        at initialization to avoid unnecessary loading during evaluation.
         
         Args:
             params: Normalized 2D array of parameters (1, N_params).
@@ -175,32 +245,25 @@ class PkEmulator:
         Returns:
             np.ndarray: Final predicted log fractional differences, shape (N_ZS, N_K_MODES).
         """
-        # Ensure PCA and Scalers are loaded
-        self._load_pcas_and_scalers()
-        
+        # Convert to TF tensor and use compiled inference
+        params_tf = tf.constant(params, dtype=tf.float32)
+
         # Predict T-components
-        t_comps_pred = self.model.predict(params, verbose=0)
+        t_comps_pred = self._compiled_inference(params_tf).numpy()
         
         # Inverse T-components to flat k-PCs (shape 1, N_ZS * N_PCS)
-        pcs_flat = self.t_comp_pca.inverse_transform(t_comps_pred)
-        
+        pcs_flat = self.t_comp_pca.inverse_transform(t_comps_pred).astype(np.float32)
+
         # Reshape to individual redshifts (shape N_ZS, N_PCS)
         # We drop the single batch dimension (axis 0) since we only have one cosmology
         pcs_pred_z_stack = pcs_flat.reshape(self.N_ZS, self.N_PCS)
         
-        # Inverse K-PCA and Scaler Loop
-        reconstructed_fracs = [
-            self.SCALERS[float(f"{z:.3f}")].inverse_transform(
-                self.PCAS[float(f"{z:.3f}")].inverse_transform(
-                    pcs_z.reshape(1, -1)
-                )
-            )[0] # Extract the 1D result from the (1, N_K_MODES) array
-            for z, pcs_z in zip(self.Z_MODES, pcs_pred_z_stack)
-        ]
-
-        # Concatenate and return
-        # Resulting shape: (N_ZS, N_K_MODES)
-        return np.stack(reconstructed_fracs)
+        reconstructed_fracs = (
+            np.einsum('zp,zpk->zk', pcs_pred_z_stack, self.INVERSE_TRANSFORM_MATRICES) +
+            self.INVERSE_TRANSFORM_OFFSETS
+        )
+        
+        return reconstructed_fracs.astype(np.float32)
 
     def get_pks(self, params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -217,10 +280,10 @@ class PkEmulator:
         """
         # Normalize cosmological parameters
         # Ensure input is a 2D array (1, N_params) for the scaler/model
-        x_norm = self.param_scaler.transform(np.array(params).reshape(1, -1))
+        x_norm = self.param_scaler.transform(np.array(params, dtype=np.float32).reshape(1, -1))
         
         # Compute MPS approximation (symbolic P(k) - always needed)
-        pk_mps = self._compute_mps_approximation(np.array(params))
+        pk_mps = self._compute_mps_approximation(np.array(params, dtype=np.float32))
 
         # Decide whether to apply emulator corrections
         if use_syren is True:
@@ -232,10 +295,11 @@ class PkEmulator:
             logfrac = self._predict_fracs_all_z(x_norm)
             
             # Full emulated P(k, z)
-            pks = np.exp(logfrac) * pk_mps
+            pks = (np.exp(logfrac, dtype=np.float32) * pk_mps).astype(np.float32)
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks
+
 
 
 # --- Public Module-Level Interface ---
