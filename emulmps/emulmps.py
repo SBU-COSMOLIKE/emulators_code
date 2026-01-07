@@ -483,9 +483,16 @@ class emulmps(Theory):
             h = params['H0'] / 100.0
             
             # Convert k:
-            k_mpc = k_hmpc * h
+            # PATCH FOR UNIT CONVERSIONS
+            if self.use_syren:
+                k_mpc = k_hmpc * h
+            else:
+                k_mpc = k_hmpc
             # Convert Pk:
-            Pk_lin_mpc = Pk_lin_hmpc / h**3
+            if self.use_syren:
+                Pk_lin_mpc = Pk_lin_hmpc / h**3
+            else:
+                Pk_lin_mpc = Pk_lin_hmpc
 
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
@@ -495,7 +502,10 @@ class emulmps(Theory):
             
             # Store NONLINEAR P(k) if computed
             if Pk_nl_hmpc is not None:
-                Pk_nl_mpc = Pk_nl_hmpc / h**3
+                if self.use_syren:
+                    Pk_nl_mpc = Pk_nl_hmpc / h**3
+                else:
+                    Pk_nl_mpc = Pk_nl_hmpc
                 state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
                     k_mpc, z_array, Pk_nl_mpc
                 )
