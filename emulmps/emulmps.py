@@ -228,9 +228,9 @@ class emulmps(Theory):
         [As_1e9, ns, H0, omegab, omegam, w0, wa]
     
     And outputs:
-        - k: array of k-modes in h/Mpc, shape (2400,), range [10^-5, 10^2]
+        - k: array of k-modes in 1/Mpc, shape (2400,), range [10^-5, 10^2]
         - z: array of redshifts, shape (122,), range [0, 50]
-        - Pk: power spectrum in (Mpc/h)^3, shape (122, 2400)
+        - Pk: power spectrum in Mpc^3, shape (122, 2400)
     
     Supports LCDM, wCDM (constant w), and w0waCDM cosmologies.
 
@@ -300,7 +300,7 @@ class emulmps(Theory):
         
         # Get use_syren flag (default: False, meaning use emulator corrections)
         # When True, bypasses emulator and uses only symbolic approximation
-        self.use_syren = self.extra_args.get('use_syren', True)
+        self.use_syren = self.extra_args.get('use_syren', False)
         
         # Get nonlinear correction method
         # Default is 'halofit+' (from VM)
@@ -322,7 +322,9 @@ class emulmps(Theory):
                     f"Valid options: {valid_methods}"
                 )
         else:
+            # VM BEGINS
             self.nonlinear_method = 'halofit+' # VM set a default
+            #VM ENDS
         
         # Get parameter ordering from config, or use default w0waCDM ordering
         self.param_order = self.extra_args.get(
@@ -398,8 +400,7 @@ class emulmps(Theory):
         It extracts the required parameters, converts to emulator format,
         calls the emulmps emulator, and stores the result.
         
-        The emulator returns P(k,z) in units of h/Mpc for k and (Mpc/h)^3 for Pk.
-        We convert to standard Cobaya units: 1/Mpc for k and Mpc^3 for Pk.
+        The emulator returns P(k,z) in units of 1/Mpc for k and Mpc^3 for Pk.
         
         By default, both linear and nonlinear P(k) are computed and stored.
         
@@ -462,30 +463,17 @@ class emulmps(Theory):
             # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
             # Pass use_syren flag to control whether to apply emulator corrections
-            k_hmpc, z_array, Pk_lin_hmpc = get_pks(emul_params, use_syren=self.use_syren)
+            k_mpc, z_array, Pk_lin_mpc = get_pks(emul_params, use_syren=self.use_syren)
             
             # ===================================================================
             # NONLINEAR CORRECTIONS (computed by default)
             # ===================================================================
             # Compute nonlinear P(k) using boost method
-            Pk_nl_hmpc = None
+            Pk_nl_mpc = None
             if self.nonlinear_method is not None:
-                Pk_nl_hmpc = self._apply_nonlinear_boost(
-                    Pk_lin_hmpc, k_hmpc, z_array, params
+                Pk_nl_mpc = self._apply_nonlinear_boost(
+                    Pk_lin_mpc, k_mpc, z_array, params
                 )
-            
-            # ===================================================================
-            # UNIT CONVERSION: h/Mpc -> 1/Mpc and (Mpc/h)^3 -> Mpc^3
-            # ===================================================================
-            # Cobaya standard units are 1/Mpc for k and Mpc^3 for Pk
-            
-            # Extract h from H0
-            h = params['H0'] / 100.0
-            
-            # Convert k:
-            k_mpc = k_hmpc * h
-            # Convert Pk:
-            Pk_lin_mpc = Pk_lin_hmpc / h**3
 
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
@@ -494,8 +482,7 @@ class emulmps(Theory):
             )
             
             # Store NONLINEAR P(k) if computed
-            if Pk_nl_hmpc is not None:
-                Pk_nl_mpc = Pk_nl_hmpc / h**3
+            if Pk_nl_mpc is not None:
                 state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
                     k_mpc, z_array, Pk_nl_mpc
                 )
@@ -677,7 +664,7 @@ class emulmps(Theory):
         self.current_state[key] = result
         return result
 
-    def _apply_nonlinear_boost(self, Pk_lin_hmpc, k_hmpc, z_array, params, emulator='EH'):
+    def _apply_nonlinear_boost(self, Pk_lin_mpc, k_mpc, z_array, params, emulator='EH'):
         """
         Apply nonlinear corrections using symbolic_pofk boost.
         
@@ -686,13 +673,13 @@ class emulmps(Theory):
             P_nl,emul = P_lin,emul x B_symbolic
         
         Args:
-            Pk_lin_hmpc: Linear power spectrum in (Mpc/h)^3, shape (n_z, n_k)
-            k_hmpc: k-modes in h/Mpc, shape (n_k,)
+            Pk_lin_mpc: Linear power spectrum in (Mpc)^3, shape (n_z, n_k)
+            k_mpc: k-modes in h/Mpc, shape (n_k,)
             z_array: Redshift array, shape (n_z,)
             params: Dictionary of cosmological parameters
             
         Returns:
-            np.ndarray: Nonlinear power spectrum in (Mpc/h)^3, same shape as input
+            np.ndarray: Nonlinear power spectrum in (Mpc)^3, same shape as input
         """
         # Extract parameters needed for symbolic_pofk
         As_1e9 = params['As_1e9']
@@ -709,12 +696,12 @@ class emulmps(Theory):
         sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns, 0.06, w0, wa)
                         
         boost = run_halofit_vec(
-            k_hmpc, sigma8, Om, Ob, h, ns, a_array,
+            k_mpc, sigma8, Om, Ob, h, ns, a_array,
             return_boost=True,
-            Plin_in=Pk_lin_hmpc,   # (nz, nk)
+            Plin_in=Pk_lin_mpc,   # (nz, nk)
         )
-        Pk_nl_hmpc = Pk_lin_hmpc * boost
-        return Pk_nl_hmpc
+        Pk_nl_mpc = Pk_lin_mpc * boost
+        return Pk_nl_mpc
 
     def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):
         """
