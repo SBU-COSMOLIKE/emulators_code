@@ -2,7 +2,7 @@ import torch, os, sys
 import torch.nn as nn
 import numpy as np
 from cobaya.theory import Theory
-from cobaya.theories.emul_cosmic_shear.emulator import ResTRF
+from cobaya.theories.emul_cosmic_shear.emulator import ResTRF, ResCNN
 from typing import Mapping, Iterable
 from cobaya.typing import empty_dict, InfoDict
 import h5py as h5
@@ -80,9 +80,6 @@ class emul_cosmic_shear(Theory):
                     self.Y_mean[i] = torch.Tensor(f['dv_fid'][:]).to(self.device)
                     self.dv_evals[i] = torch.Tensor(f['dv_evals'][:]).to(self.device)
                     self.dv_evecs[i] = torch.Tensor(f['dv_evecs'][:]).to(self.device)
-                    # right here I would like to have a "trained_params" 
-                    # so that we can check that ordering is correct!
-                    # we can save users from a simple mistake this way
             # invert the rotation matrix so that we don't do it every time we evaluate
             self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
 
@@ -94,6 +91,17 @@ class emul_cosmic_shear(Theory):
                                    int_dim_res = self.extrapar[i]['INT_DIM_RES'],
                                    int_dim_trf = self.extrapar[i]['INT_DIM_TRF'],
                                    N_channels  = self.extrapar[i]['NC_TRF'])
+
+            elif self.extrapar[i]['MLA'] == 'CNN':
+                self.M[i] = ResCNN(input_dim = len(self.ord[i]),
+                                   output_dim = self.extrapar[i]['OUTPUT_DIM'],
+                                   int_dim = self.extrapar[i]['INT_DIM_RES'],
+                                   cnn_dim = self.extrapar[i]['CNN_DIM'],
+                                   kernel_size = self.extrapar[i]['KERNEL_DIM'])
+            else:
+                print("MLA must be one of [TRF, CNN]")
+                exit()
+
             self.M[i] = self.M[i].to(self.device)
             self.M[i].load_state_dict(torch.load(self.extra_args.get('file')[i],map_location=self.device))
             self.M[i] = self.M[i].eval()
