@@ -90,7 +90,7 @@ class PkEmulator:
             )
 
             # Create compiled inference function with XLA
-            @tf.function(jit_compile=True)
+            @tf.function(jit_compile=False)
             def compiled_inference(x):
                 return self.model(x, training=False)
             
