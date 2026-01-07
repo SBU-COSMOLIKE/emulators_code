@@ -81,7 +81,15 @@ class emul_cosmic_shear(Theory):
                     self.dv_evals[i] = torch.Tensor(f['dv_evals'][:]).to(self.device)
                     self.dv_evecs[i] = torch.Tensor(f['dv_evecs'][:]).to(self.device)
             # invert the rotation matrix so that we don't do it every time we evaluate
-            self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
+            
+            # do the inverse on CPU (MPS can abort on linalg.inv for some shapes/dtypes)
+            #self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
+            if self.device.type == "mps":
+                A = self.dv_evecs[i].detach().to("cpu")
+                inv_cpu = torch.linalg.inv(A)
+                self.inv_dv_evecs[i] = inv_cpu.to(self.device)
+            else:
+                self.inv_dv_evecs[i] = torch.linalg.inv(self.dv_evecs[i])
 
             self.ord[i] = self.extra_args.get('ord')[i]
 
@@ -117,12 +125,12 @@ class emul_cosmic_shear(Theory):
         return self.req
 
     def predict_data_vector(self, X, i):
-        X = torch.Tensor(X).to(self.device)
+        X = torch.tensor(X, dtype=self.X_mean[i].dtype, device=self.device)
         with torch.no_grad():
-            X_norm = torch.nan_to_num((X-self.X_mean[i])/self.X_std[i],nan=0).to(self.device)
-            M_pred = self.M[i](X_norm).to(self.device)
-        res = (M_pred*self.dv_evals[i]) @ self.inv_dv_evecs[i] + self.Y_mean[i]
-        return res[0].cpu().detach().numpy()
+            X_norm = torch.nan_to_num((X - self.X_mean[i]) / self.X_std[i], nan=0.0)
+            M_pred = self.M[i](X_norm)
+        res = (M_pred * self.dv_evals[i]) @ self.inv_dv_evecs[i] + self.Y_mean[i]
+        return res[0].detach().cpu().numpy()
 
     def calculate(self, state, want_derived=True, **params):
         i = 0
