@@ -52,7 +52,7 @@ class PkEmulator:
     """
 
     # --- Configuration Constants (Class Attributes) ---
-    N_PCS = 22          # Number of k-space PCs per redshift
+    N_PCS = 25          # Number of k-space PCs per redshift
     N_K_MODES = 240     # Number of k modes
     
     # Fixed k and z grids
