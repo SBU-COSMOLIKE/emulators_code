@@ -216,7 +216,9 @@ class PkEmulator:
         As, ns, H0_in, Ob, Om, w0, wa = params
         h = H0_in / 100.0 # Convert H0 to h
         # Compute fiducial P(k) at z=0
-        pk_fid = plin_emulated(self.K_MODES, Om, Ob, h, ns, As=As, w0=w0, wa=wa)
+        # Convert k for plin_emulated: 1/Mpc -> h/Mpc
+        k_for_plin = self.K_MODES / h
+        pk_fid = plin_emulated(k_for_plin, Om, Ob, h, ns, As=As, w0=w0, wa=wa)
         a_array = 1.0/(self.Z_MODES + 1)
         D0 = get_approximate_D(k=1e-4, As=As, Om=Om, Ob=Ob, h=h, 
                                ns=ns, mnu=0.06, w0=w0, wa=wa, a=1)
@@ -229,6 +231,7 @@ class PkEmulator:
         growth_factors = (Dz/D0)*(Dz/D0)*(Rz/R0)
         # pk_fid[None, :] broadcasting works cleanly: (1, K) * (Z, 1) = (Z, K)
         result = pk_fid[None, :] * growth_factors[:, None]
+        result = result / h**3
         return result.astype(np.float32)
 
     def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
@@ -292,10 +295,10 @@ class PkEmulator:
         else:
             # Default behavior: apply emulator corrections
             # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
-            logfrac = self._predict_fracs_all_z(x_norm)
+            frac = np.exp(self._predict_fracs_all_z(x_norm), dtype=np.float32)
             
             # Full emulated P(k, z)
-            pks = (np.exp(logfrac, dtype=np.float32) * pk_mps).astype(np.float32)
+            pks = (frac * pk_mps).astype(np.float32)
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks

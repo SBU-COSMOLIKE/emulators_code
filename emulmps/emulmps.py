@@ -462,54 +462,32 @@ class emulmps(Theory):
             # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
             # Pass use_syren flag to control whether to apply emulator corrections
-            k_hmpc, z_array, Pk_lin_hmpc = get_pks(emul_params, use_syren=self.use_syren)
+            k_mpc, z_array, Pk_lin_mpc = get_pks(emul_params, use_syren=self.use_syren)
             
+            # Extract h from H0
+            h = params['H0'] / 100.0
+
             # ===================================================================
             # NONLINEAR CORRECTIONS (computed by default)
             # ===================================================================
             # Compute nonlinear P(k) using boost method
-            Pk_nl_hmpc = None
+            Pk_nl_mpc = None
             if self.nonlinear_method is not None:
-                Pk_nl_hmpc = self._apply_nonlinear_boost(
-                    Pk_lin_hmpc, k_hmpc, z_array, params
+                Pk_nl_mpc = self._apply_nonlinear_boost(
+                    Pk_lin_mpc*h**3, k_mpc/h, z_array, params
                 )
-            
-            # ===================================================================
-            # UNIT CONVERSION: h/Mpc -> 1/Mpc and (Mpc/h)^3 -> Mpc^3
-            # ===================================================================
-            # Cobaya standard units are 1/Mpc for k and Mpc^3 for Pk
-            
-            # Extract h from H0
-            h = params['H0'] / 100.0
-            
-            # Convert k:
-            # PATCH FOR UNIT CONVERSIONS
-            if self.use_syren:
-                k_mpc = k_hmpc * h
-            else:
-                k_mpc = k_hmpc
-            # Convert Pk:
-            if self.use_syren:
-                Pk_lin_mpc = Pk_lin_hmpc / h**3
-            else:
-                Pk_lin_mpc = Pk_lin_hmpc
+
+           # Store NONLINEAR P(k) if computed
+            if Pk_nl_mpc is not None:
+                state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
+                    k_mpc, z_array, Pk_nl_mpc
+                )
 
             # Store LINEAR P(k) in state dictionary with key matching Cobaya convention
             # Key format: ("Pk_grid", nonlinear, var_pair_sorted)
             state[("Pk_grid", False, "delta_tot", "delta_tot")] = (
                 k_mpc, z_array, Pk_lin_mpc
             )
-            
-            # Store NONLINEAR P(k) if computed
-            if Pk_nl_hmpc is not None:
-                if self.use_syren:
-                    Pk_nl_mpc = Pk_nl_hmpc / h**3
-                else:
-                    Pk_nl_mpc = Pk_nl_hmpc
-                state[("Pk_grid", True, "delta_tot", "delta_tot")] = (
-                    k_mpc, z_array, Pk_nl_mpc
-                )
-            
             # Also store in simple format for backward compatibility (linear)
             state["Pk_grid"] = {
                 'k': k_mpc,          # Shape: (nk,), in 1/Mpc
@@ -723,7 +701,7 @@ class emulmps(Theory):
             return_boost=True,
             Plin_in=Pk_lin_hmpc,   # (nz, nk)
         )
-        Pk_nl_hmpc = Pk_lin_hmpc * boost
+        Pk_nl_hmpc = Pk_lin_hmpc * boost / h**3
         return Pk_nl_hmpc
 
     def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):
