@@ -298,8 +298,8 @@ class emulmps(Theory):
         self.renames = empty_dict
         self.extra_args = getattr(self, 'extra_args', {})
         
-        # Get use_syren flag (default: False, meaning use emulator corrections)
-        # When True, bypasses emulator and uses only symbolic approximation
+        # Get use_syren flag (default: True, meaning use only symbolic approximation)
+        # When False, uses emulator corrections
         self.use_syren = self.extra_args.get('use_syren', True)
         
         # Get nonlinear correction method
@@ -463,6 +463,12 @@ class emulmps(Theory):
             # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
             # Pass use_syren flag to control whether to apply emulator corrections
             k_mpc, z_array, Pk_lin_mpc = get_pks(emul_params, use_syren=self.use_syren)
+            print("Vic params: ", emul_params)
+            print("Vic k: ", k_mpc[:20])
+            print("Vic Pk: ", Pk_lin_mpc[0][:20])
+            np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_syren{self.use_syren}_ks", k_mpc)
+            np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_syren{self.use_syren}_pks", Pk_lin_mpc[0])
+
             
             # Extract h from H0
             h = params['H0'] / 100.0
