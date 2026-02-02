@@ -2,6 +2,31 @@ import numpy as np
 import warnings
 import scipy.integrate
 
+
+## Vic edits
+def safe_log_w_param(w0, wa=0, epsilon=1e-10):
+    """
+    Safely compute log of w-parameter expressions.
+    
+    For expressions like log(-w0) or log(-w0 - wa):
+    - If the argument is positive, return log normally
+    - If negative or zero, use log(abs(x) + epsilon)
+    
+    Args:
+        w0: dark energy equation of state parameter (constant)
+        wa: dark energy equation of state parameter (evolving)
+        epsilon: small value to prevent log(0)
+    
+    Returns:
+        Logarithm of the expression, handling edge cases
+    """
+    arg = -w0 - wa if wa != 0 else -w0
+    
+    # Use abs to handle both positive and negative cases
+    # Add epsilon to prevent log(0)
+    return np.log(np.abs(arg) + epsilon)
+## Vic edits
+
 def get_eisensteinhu_nw(k, As, Om, Ob, h, ns, mnu, w0, wa):
     """
     Compute the no-wiggles Eisenstein & Hu approximation
@@ -138,6 +163,10 @@ def log10_S(k, As, Om, Ob, h, ns, mnu, w0, wa):
                   0.0985, 0.0009, 0.1258, 0.2476, 0.1841, 0.0316,
                   0.1385, 0.2825, 0.8098, 0.019, 0.1376, 0.3733])
 
+    ## Vic changes
+    epsilon = 1e-10  # Small value to prevent log(0)
+    ## Vic changes end
+
     part1 = -e[0] * h
     part2 = -e[1] * w0
     part3 = -e[2] * mnu / np.sqrt(e[3] + k**2)
@@ -148,7 +177,11 @@ def log10_S(k, As, Om, Ob, h, ns, mnu, w0, wa):
 
     numerator_inner = (e[9] * Ob - e[10] * w0 - e[11] * wa +
                        (e[12] * w0 + e[13]) / (e[14] * wa + w0))
-    denominator_inner = np.sqrt(e[15] + (Om + e[16] * np.log(-e[17] * w0))**2)
+    
+    ## Vic changes: Use safe log with abs
+    log_term = np.log(np.abs(-e[17] * w0) + epsilon)
+    denominator_inner = np.sqrt(e[15] + (Om + e[16] * log_term)**2)
+    ## Vic changes end
 
     part6 = numerator_inner / denominator_inner
 
@@ -179,13 +212,23 @@ def growth_correction_R(As, Om, Ob, h, ns, mnu, w0, wa, a):
                   0.4136, 1.4769, 0.5959, 0.4553, 0.0799, 5.8311,
                   5.8014, 6.7085, 0.3445, 1.2498, 0.3756, 0.2136])
 
+    ## Vic changes
+    epsilon = 1e-10  # Small value to prevent log(0)
+    ## Vic changes end
+
     part1 = d[0]
 
-    denominator_inner1 = a * \
-        d[1] + d[2] + (Om * d[3] - a * d[4]) * np.log(-d[5] * w0 - d[6] * wa)
+    ## Vic changes: Use safe log with abs
+    log_term1 = np.log(np.abs(-d[5] * w0 - d[6] * wa) + epsilon)
+    denominator_inner1 = a * d[1] + d[2] + (Om * d[3] - a * d[4]) * log_term1
+    ## Vic changes end
     part2 = -1 / denominator_inner1
 
-    numerator_inner2 = Om * d[7] - a * d[8] + np.log(-d[9] * w0 - d[10] * wa)
+    ## Vic changes: Use safe log with abs
+    log_term2 = np.log(np.abs(-d[9] * w0 - d[10] * wa) + epsilon)
+    numerator_inner2 = Om * d[7] - a * d[8] + log_term2
+    ## Vic changes end
+
     denominator_inner2 = -a * d[11] + d[12] + d[13] * \
         (Om * d[14] + a * d[15] - 1) * (d[16] * w0 + d[17] * wa + 1)
     part3 = -numerator_inner2 / denominator_inner2
@@ -311,6 +354,10 @@ def As_to_sigma8(As, Om, Ob, h, ns, mnu, w0, wa):
                   6.0094, 1.9569, 2.1477, 1.1902, 0.128, 0.6931, 
                   0.2661])
 
+    ## Vic changes
+    epsilon = 1e-10  # Small value to prevent log(0)
+    ## Vic changes end
+
     term1_inner = (Om * b[1] + 
                    (b[2] * mnu - b[3] * ns + np.log(b[4] * h - b[5] * mnu)) *
                    (b[6] * h + b[7] * mnu - b[8] * ns + 1))
@@ -318,10 +365,16 @@ def As_to_sigma8(As, Om, Ob, h, ns, mnu, w0, wa):
     
     term2 = b[9] * h - mnu
 
+    ## Vic changes: Use safe log with abs for all w0, wa log terms
+    log_term1 = np.log(np.abs(-b[18] * w0 - b[19] * wa) + epsilon)
+    log_term2 = np.log(np.abs(-b[21] * w0 - b[22] * wa) + epsilon)
+    log_term3 = np.log(np.abs(-b[23] * w0 - b[24] * wa) + epsilon)
+    
     term3_inner1 = (b[12] * w0 - b[13] * wa - np.log(Om * b[14])) * \
-                   (Om * b[15] + b[16] * w0 + b[17] * wa + np.log(-b[18] * w0 - b[19] * wa))
-    term3_inner2 = np.log(Om * b[20] + np.log(-b[21] * w0 - b[22] * wa))
-    term3 = b[10] * w0 - b[11] * mnu - term3_inner1 - term3_inner2 + np.log(-b[23] * w0 - b[24] * wa)
+                   (Om * b[15] + b[16] * w0 + b[17] * wa + log_term1)
+    term3_inner2 = np.log(Om * b[20] + log_term2)
+    term3 = b[10] * w0 - b[11] * mnu - term3_inner1 - term3_inner2 + log_term3
+    ## Vic changes end
     
     term4_inner1 = Ob * b[30] - b[31] * h - np.log(Om * b[32])
     term4_inner2 = Om * b[33] - b[34] * h - b[35] * mnu - b[36] * ns
