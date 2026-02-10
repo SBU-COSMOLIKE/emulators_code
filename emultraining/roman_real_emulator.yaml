@@ -299,7 +299,6 @@ params:
   roman_BTA_1:
     value: 0.0
     latex: A_\mathrm{BTA-IA,Roman}^1
-
 # Galaxy Bias
   roman_B1_1:
     prior:
@@ -441,22 +440,14 @@ train_args:
         'roman_A1_1','roman_A1_2','roman_B1_1','roman_B1_2','roman_B1_3','roman_B1_4','roman_B1_5','roman_B1_6',
         'roman_B1_7','roman_B1_8']]
       fast_params: [['roman_M1','roman_M2','roman_M3','roman_M4','roman_M5','roman_M6','roman_M7','roman_M8']]
-      # extrapar: [{'MLA': 'MLP', 
-      #   'INT_DIM_RES': 512}]
-      # extrapar: [{'MLA': 'TRF', 
-      #   'INT_DIM_RES': 128, 
-      #   'INT_DIM_TRF': 576, 
-      #   'NC_TRF': 72,}]
       extrapar: [{'MLA': 'CNN', 
         'INT_DIM_RES': 256, 
         'CNN_DIM': 576, 
         'KERNEL_DIM': 21}]
-
   parameter_covmat_file: './projects/roman_real/data/w0wa_fisher_covmat_LCDMcenter.txt' # must have a header like cobaya MCMC output.
   data_covmat_file: './projects/roman_real/data/roman_real_training_cov'  # same one as for cobaya
   training_data_path: './projects/roman_real/'
-
-  n_train: 1000000 
+  n_train: 100000 
   t_train: 1024
   train_datavectors_file: 'roman_real_w0wa_b_taka_train_datavectors_T1024_1.npy'
   train_parameters_file:  'roman_real_w0wa_b_taka_train_parameters_T1024_1.txt'
