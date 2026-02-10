@@ -21,34 +21,35 @@ from pathlib import Path
 #-------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(prog='dataset_generator')
 
-parser.add_argument("--yaml", "-y",
-                    dest="cobaya_yaml",
+parser.add_argument("--yaml",
+                    dest="yaml",
                     help="The training YAML containing the training_args block",
                     type=str,
                     nargs='?')
-parser.add_argument("--probe", "-p",
+parser.add_argument("--root",
+                    dest="root",
+                    help="Project folder",
+                    type=str,
+                    nargs='?',
+                    default="projects/example/")
+parser.add_argument("--probe",
                     dest="probe",
-                    help="the probe, listed in the yaml, of which to generate data vectors for.",
+                    help="probe of which to generate data vectors",
                     type=str,
                     nargs='?')
-parser.add_argument("--mode", "-m",
+parser.add_argument("--mode",
                     dest="mode",
-                    help="The generation mode. One of [train, valid, test]",
+                    help="generation mode = [train, valid, test]",
                     type=str,
                     nargs='?',
                     default='train')
-parser.add_argument("--chainonly",
-                    dest="chainonly",
-                    help="Only Compute and output chain with train/test/val params",
+parser.add_argument("--chain",
+                    dest="chain",
+                    help="only compute and output train/test/val chain",
                     nargs='?',
                     type=bool,
                     default=True)
 args, unknown = parser.parse_known_args()
-cobaya_yaml   = args.cobaya_yaml
-probe         = args.probe
-mode          = args.mode
-chainonly     = args.chainonly
-
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Class Definition
@@ -58,52 +59,52 @@ class dataset:
   #-----------------------------------------------------------------------------
   # init
   #-----------------------------------------------------------------------------  
-  def __init__(self, cobaya_yaml, probe, mode='train', target=0.15):
+  def __init__(self, fyaml, probe, mode='train', target=0.15):
+    self.root  = f"{os.environ.get('ROOTDIR').rstrip('/')}/{args.root.rstrip('/')}"
     self.mode  = mode
     self.probe = probe
     #---------------------------------------------------------------------------
-    info = yaml_load(cobaya_yaml)
+    info = yaml_load(fyaml)
     self.model = get_model(info)
-    with open(cobaya_yaml,'r') as stream:
-      args = yaml.safe_load(stream)
+    with open(fyaml,'r') as stream:
+      yamlargs = yaml.safe_load(stream)
 
     #---------------------------------------------------------------------------
     self.sampled_params = args['train_args'][self.probe]['extra_args']['ord'][0]
     self.prior_params   = list(self.model.parameterization.sampled_params())
     self.sampling_dim   = len(self.sampled_params)
     #---------------------------------------------------------------------------
-    self.PATH = (os.environ.get("ROOTDIR") + '/' + 
-                 args['train_args']['training_data_path'])
+    PATH = f"{self.root}/chains"
     if self.mode == 'train':
-      self.N = args['train_args']['n_train']
-      self.T = args['train_args']['t_train']
-      self.datavectors_file = (self.PATH + 
-                               args['train_args']['train_datavectors_file'])
-      self.parameters_file  = (self.PATH + 
-                               args['train_args']['train_parameters_file'])
+      self.N = yamlargs['train_args']['n_train']
+      self.T = yamlargs['train_args']['t_train']
+      self.datavectors_file = (PATH + "/" +
+                               yamlargs['train_args']['train_datavectors_file'])
+      self.parameters_file  = (PATH + "/" +
+                               yamlargs['train_args']['train_parameters_file'])
     elif self.mode == 'valid':
-      self.N = args['train_args']['n_valid']
-      self.T = args['train_args']['t_valid']
-      self.datavectors_file = (self.PATH + 
-                               args['train_args']['valid_datavectors_file'])
-      self.parameters_file  = (self.PATH + 
-                               args['train_args']['valid_parameters_file'])
+      self.N = yamlargs['train_args']['n_valid']
+      self.T = yamlargs['train_args']['t_valid']
+      self.datavectors_file = (PATH + "/" +
+                               yamlargs['train_args']['valid_datavectors_file'])
+      self.parameters_file  = (PATH + "/" +
+                               yamlargs['train_args']['valid_parameters_file'])
     elif self.mode == 'test':
-      self.N = args['train_args']['n_test']
-      self.T = args['train_args']['t_test']
-      self.datavectors_file = (self.PATH + 
-                               args['train_args']['test_datavectors_file'])
-      self.parameters_file  = (self.PATH + 
-                               args['train_args']['test_parameters_file'])
+      self.N = yamlargs['train_args']['n_test']
+      self.T = yamlargs['train_args']['t_test']
+      self.datavectors_file = (PATH + "/" +
+                               yamlargs['train_args']['test_datavectors_file'])
+      self.parameters_file  = (PATH + "/" +
+                               yamlargs['train_args']['test_parameters_file'])
 
     #---------------------------------------------------------------------------
     # Reorder fiducial data vector
-    fid = args["train_args"]["fiducial"]
+    fid = yamlargs["train_args"]["fiducial"]
     self.fiducial = np.array([fid[p] for p in self.sampled_params], dtype=float)
 
     #---------------------------------------------------------------------------
     # Reorder cov to follow # ['extra_args']['ord']
-    with open(args["train_args"]["parameter_covmat_file"]) as f:
+    with open(yamlargs["train_args"]["parameter_covmat_file"]) as f:
       covmat_params = np.array(f.readline().split()[1:])
       raw_covmat = np.loadtxt(f) 
     pidx = {p : i for i, p in enumerate(covmat_params)} # Map param name: idx
@@ -182,21 +183,21 @@ class dataset:
     self.samples = xf # we just need the samples to compute the data vector
 
     # save chain begins --------------------------------------------------------
+    PATH = f"{self.root}/chains"
     stem = Path(self.parameters_file).stem
     root = f"{stem}_{self.probe}_{self.mode}"
 
     hd=f"nwalkers={nwalkers}\n"
-    np.savetxt(f"{root}.1.txt",
+    np.savetxt(f"{PATH}/{root}.1.txt",
                np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
                fmt="%.9e",
                header=hd + ''.join(["weights", "lnp"] + names),
                comments="# ")
     
-
     # save a range files -------------------------------------------------------
     hd = ["weights","lnp"] + names + ["chi2*"]
     rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
-    with open(f"{root}.ranges", "w") as f: 
+    with open(f"{PATH}/{root}.ranges", "w") as f: 
       f.write(f"# {' '.join(hd)}\n")
       f.writelines(f"{n} {l:.5e} {h:.5e}\n" for n, l, h in rows)
 
@@ -205,13 +206,13 @@ class dataset:
     latex  = [param_info[x]['latex'] for x in names]
     names.append("chi2*")
     latex.append("\\chi^2")
-    np.savetxt(f"{root}.paramnames", 
+    np.savetxt(f"{PATH}/{root}.paramnames", 
                np.column_stack((names,latex)),
                fmt="%s")
 
     # save a cov matrix --------------------------------------------------------
     samples = loadMCSamples(f"{root}", settings={'ignore_rows': u'0.0'})
-    np.savetxt(f"{root}.covmat",
+    np.savetxt(f"{PATH}/{root}.covmat",
                np.array(samples.cov(), dtype='float64'),
                fmt="%.9e",
                header=' '.join(names),
@@ -362,16 +363,19 @@ class dataset:
 if __name__ == "__main__":
   comm = MPI.COMM_WORLD
   rank = comm.Get_rank()
-
-  print(f"INFO\nYAML: {cobaya_yaml}\nmode: {mode}\nprobe: {probe}\n")
-
-  gen = dataset(cobaya_yaml, probe, mode)
+  ROOT = os.environ.get('ROOTDIR').rstrip('/')
+  PATH = f"{ROOT}/{args.root.rstrip('/')}"
+  fyaml = f"{PATH}/{args.yaml}"
+  print(f"INFO\nYAML: {args.yaml}\n"
+        f"mode: {args.mode}\n"
+        f"probe: {args.probe}\n")
+  gen = dataset(fyaml=fyaml, probe=args.probe, mode=args.mode)
   if (rank == 0):
     generator.run_mcmc()
-    if not chainonly:
+    if not args.chain:
       generator.generate_datavectors()
   else:
-    if not chainonly:
+    if not args.chain:
       generator.generate_datavectors()
   MPI.Finalize()
   exit(0)
