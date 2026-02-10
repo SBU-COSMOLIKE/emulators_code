@@ -1,19 +1,26 @@
 import numpy as np
-import emcee
-import cobaya
+import emcee, argparse, os, sys, scipy, yaml, time
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
-import sys
-import os
-import scipy
-import yaml
 from mpi4py import MPI
-import copy
 from tqdm import tqdm
-import time
-import argparse
 from pathlib import Path
-
+from getdist import loadMCSamples
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+# Example how to run this program
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#mpirun -n 2 --oversubscribe \
+#  python external_modules/code/emulators/emultrf/emultraining/dataset_generator_lensing.py \
+#    --root projects/roman_real/  \
+#    --fileroot emulators/w0wa_nla_halofit_cosmic_shear_cnn/ \
+#    --nparams 1000 \
+#    --temp 128 \
+#    --yaml 'w0wa_takahashi_nobaryon_cs_CNN.yaml' \
+#    --datavsfile 'w0wa_takahashi_nobaryon_dvs_train' \
+#    --paramfile 'w0wa_params_train' \
+#    --chain 1 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -32,11 +39,12 @@ parser.add_argument("--root",
                     type=str,
                     nargs='?',
                     default="projects/example/")
-parser.add_argument("--probe",
-                    dest="probe",
-                    help="probe of which to generate data vectors",
+parser.add_argument("--fileroot",
+                    dest="fileroot",
+                    help="Subfolder of Project folder where we find yaml and fisher",
                     type=str,
-                    nargs='?')
+                    nargs='?',
+                    default="projects/example/emulators")
 parser.add_argument("--mode",
                     dest="mode",
                     help="generation mode = [train, valid, test]",
@@ -49,6 +57,28 @@ parser.add_argument("--chain",
                     nargs='?',
                     type=bool,
                     default=True)
+parser.add_argument("--nparams",
+                    dest="nparams",
+                    help="Number of Parameters to Generate",
+                    nargs='?',
+                    type=int,
+                    default=100000)
+parser.add_argument("--temp",
+                    dest="temp",
+                    help="Number of Parameters to Generate",
+                    nargs='?',
+                    type=int,
+                    default=128)
+parser.add_argument("--datavsfile",
+                    dest="datavsfile",
+                    help="File to save data vectors",
+                    nargs='?',
+                    type=str)
+parser.add_argument("--paramfile",
+                    dest="paramfile",
+                    help="File to save parameters",
+                    nargs='?',
+                    type=str)
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -59,79 +89,73 @@ class dataset:
   #-----------------------------------------------------------------------------
   # init
   #-----------------------------------------------------------------------------  
-  def __init__(self, fyaml, probe, mode='train', target=0.15):
-    self.root  = f"{os.environ.get('ROOTDIR').rstrip('/')}/{args.root.rstrip('/')}"
-    self.mode  = mode
-    self.probe = probe
+  def __init__(self, target=0.15):
     #---------------------------------------------------------------------------
-    info = yaml_load(fyaml)
+    # Basic definitions
+    #---------------------------------------------------------------------------
+    root = os.environ.get('ROOTDIR').rstrip('/')
+    root = f"{root}/{args.root.rstrip('/')}"
+    fileroot = f"{root}/{args.fileroot.rstrip('/')}"
+    #---------------------------------------------------------------------------
+    # Load Cobaya model (needed for computing likelihood)
+    #---------------------------------------------------------------------------
+    info = yaml_load(f"{fileroot}/{args.yaml}")
     self.model = get_model(info)
-    with open(fyaml,'r') as stream:
-      yamlargs = yaml.safe_load(stream)
-
     #---------------------------------------------------------------------------
-    self.sampled_params = args['train_args'][self.probe]['extra_args']['ord'][0]
-    self.prior_params   = list(self.model.parameterization.sampled_params())
-    self.sampling_dim   = len(self.sampled_params)
+    # Load yaml again (for reading options)
     #---------------------------------------------------------------------------
-    PATH = f"{self.root}/chains"
-    if self.mode == 'train':
-      self.N = yamlargs['train_args']['n_train']
-      self.T = yamlargs['train_args']['t_train']
-      self.datavectors_file = (PATH + "/" +
-                               yamlargs['train_args']['train_datavectors_file'])
-      self.parameters_file  = (PATH + "/" +
-                               yamlargs['train_args']['train_parameters_file'])
-    elif self.mode == 'valid':
-      self.N = yamlargs['train_args']['n_valid']
-      self.T = yamlargs['train_args']['t_valid']
-      self.datavectors_file = (PATH + "/" +
-                               yamlargs['train_args']['valid_datavectors_file'])
-      self.parameters_file  = (PATH + "/" +
-                               yamlargs['train_args']['valid_parameters_file'])
-    elif self.mode == 'test':
-      self.N = yamlargs['train_args']['n_test']
-      self.T = yamlargs['train_args']['t_test']
-      self.datavectors_file = (PATH + "/" +
-                               yamlargs['train_args']['test_datavectors_file'])
-      self.parameters_file  = (PATH + "/" +
-                               yamlargs['train_args']['test_parameters_file'])
-
-    #---------------------------------------------------------------------------
-    # Reorder fiducial data vector
-    fid = yamlargs["train_args"]["fiducial"]
-    self.fiducial = np.array([fid[p] for p in self.sampled_params], dtype=float)
-
-    #---------------------------------------------------------------------------
-    # Reorder cov to follow # ['extra_args']['ord']
-    with open(yamlargs["train_args"]["parameter_covmat_file"]) as f:
-      covmat_params = np.array(f.readline().split()[1:])
-      raw_covmat = np.loadtxt(f) 
-    pidx = {p : i for i, p in enumerate(covmat_params)} # Map param name: idx
-    try:
-      idx = np.array([pidx[p] for p in self.sampled_params], dtype=int)
-    except KeyError as e:
-      raise ValueError(f"Param {e.args[0]!r} not found in covmat header") from None
-    self.covmat = raw_covmat[np.ix_(idx, idx)]
+    with open(f"{fileroot}/{args.yaml}", 'r') as stream:
+      yamlopts = yaml.safe_load(stream)
     
+    # preferred ordering of params
+    self.sampled_params = yamlopts['train_args']['ord'][0]
+    
+    # load fiducial data vector
+    fid = yamlopts["train_args"]["fiducial"]
+    
+    # load cov param matrix
+    raw_covmat_file = yamlopts["train_args"]["params_covmat_file"]
+    with open(f"{fileroot}/{raw_covmat_file}") as f:
+      raw_covmat_params_names = np.array(f.readline().split()[1:])
+      raw_covmat = np.loadtxt(f) 
+    
+    # load probe suffix
+    probe = yamlopts["train_args"]["probe"]
     #---------------------------------------------------------------------------
-    # Reorder bounds to follow # ['extra_args']['ord']
-    raw_bounds  = model.prior.bounds(confidence=0.999999)
-    self.bounds = np.asarray(raw_bounds)[idx, :]    
+    # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
+    #---------------------------------------------------------------------------
+    # Reorder fiducial
+    self.fiducial = np.array([fid[p] for p in self.sampled_params], 
+                             copy=True, dtype=np.float64)
+
+    # Reorder covmat
+    pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
+    try:
+      idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
+    except KeyError as e:
+      raise ValueError(f"{e.args[0]!r} not found in cov header") from None
+    covmat = raw_covmat[np.ix_(idx, idx)]
+    
+    # Reorder bounds
+    self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
+                           copy=True, dtype=np.float64)[idx,:]    
 
     #---------------------------------------------------------------------------
     # Reduce correlation on the covariance matrix to max = target
-    sig   = np.sqrt(np.diag(self.covmat))
+    #---------------------------------------------------------------------------
+    sig   = np.sqrt(np.diag(covmat))
+    n = len(sig)
     outer = np.outer(sig, sig)
-    corr  = self.covmat / outer
-    np.abs(corr - np.eye(n)).max()
+    corr  = covmat / outer 
+    m = np.abs(corr - np.eye(n)).max()
     corr /= max(1.0, m / target) if m > 0 else 1.0
     np.fill_diagonal(corr, 1.0)
-    self.covmat = corr * outer
+    covmat = corr * outer
 
     #---------------------------------------------------------------------------
-    # Inverse
-    C = 0.5 * (self.covmat + self.covmat.T)  # enforce symmetry
+    # Compute covmat inverse
+    #---------------------------------------------------------------------------
+    C = 0.5 * (covmat + covmat.T)  # enforce symmetry
     jitt = 0.0
     for _ in range(10):
       try:
@@ -139,12 +163,20 @@ class dataset:
         break
       except np.linalg.LinAlgError:
         scale = np.mean(np.diag(C)) # scale jitt to matrix sz start tiny -> grow
-        jitt = (1e-12 if jitt == 0 else jitt * 10) * (scale if scale > 0 else 1.0)
+        jitt = (1e-12 if jitt==0 else jitt*10) * (scale if scale > 0 else 1.)
     else:
       raise np.linalg.LinAlgError("could not stabilized cov to SPD w/ jitter")
     I = np.eye(C.shape[0])
     self.covmat = C + jitt*np.eye(C.shape[0])
     self.inv_covmat = np.linalg.solve(L.T, np.linalg.solve(L, I))
+
+    #---------------------------------------------------------------------------
+    # Define output files
+    #---------------------------------------------------------------------------
+    datavsfile = Path(args.datavsfile).stem
+    self.dvsf = f"{root}/chains/{datavsfile}_{probe}"
+    paramfile = Path(args.paramfile).stem
+    self.paramsf = f"{root}/chains/{args.paramfile}_{probe}"
 
   #-----------------------------------------------------------------------------
   # likelihood
@@ -152,19 +184,20 @@ class dataset:
   def param_logpost(self,x):
     y = x - self.fiducial
     logprior = self.model.prior.logp(x)
-    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.T
+    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/args.temp
 
   #-----------------------------------------------------------------------------
   # run mcmc
   #-----------------------------------------------------------------------------
-  def run_mcmc(self, nwalkers = 100):
-    ndim     = self.sampling_dim
+  def run_mcmc(self):
+    ndim     = len(self.sampled_params)
     names    = list(self.sampled_params)
     bds      = self.bounds
-    nsteps   = int(5000 + 2*self.N)
-    burnin   = int(0.3*nstw)
-    thin     = float((nsteps-burnin)*nwalkers)/self.N
-    nwalkers = max(nwalkers, 3*ndim)
+    nwalkers = int(3*ndim)
+    nsteps   = int(max(7500, args.nparams/nwalkers)) # (for safety we assume tau>100)
+    burnin   = int(0.3*nsteps)                       # 30% burn-in
+    thin     = int(float((nsteps-burnin)*nwalkers)/args.nparams)
+
     sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
                                     ndim = ndim, 
                                     moves=[(emcee.moves.DEMove(), 0.8),
@@ -173,22 +206,24 @@ class dataset:
     sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
                                      0.5*np.sqrt(np.diag(self.covmat))*
                                      np.random.normal(size=(nwalkers, ndim)), 
-                     nsteps = nstw, 
-                     progress=True)
+                     nsteps=nsteps, 
+                     progress=False)
+    tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
+                   copy=True, dtype=np.float64).max()
+    print(f"Partial Result: tau = {tau}\n"
+          f"nwalkers={nwalkers}\n"
+          f"nsteps (per walker) = {nsteps}\n"
+          f"nsteps/tau = {nsteps/tau} (min should be ~50)\n")
     xf   = sampler.get_chain(flat=True, discard=burnin, thin=thin)
     lnp  = sampler.get_log_prob(flat=True, discard=burnin, thin=thin)
-    w    = np.ones((len(xf), 1), dtype='float64')
+    w    = np.ones((len(xf), 1), dtype=np.float64)
     chi2 = -2*lnp
 
     self.samples = xf # we just need the samples to compute the data vector
 
     # save chain begins --------------------------------------------------------
-    PATH = f"{self.root}/chains"
-    stem = Path(self.parameters_file).stem
-    root = f"{stem}_{self.probe}_{self.mode}"
-
     hd=f"nwalkers={nwalkers}\n"
-    np.savetxt(f"{PATH}/{root}.1.txt",
+    np.savetxt(f"{self.paramsf}.1.txt",
                np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
                fmt="%.9e",
                header=hd + ''.join(["weights", "lnp"] + names),
@@ -197,7 +232,7 @@ class dataset:
     # save a range files -------------------------------------------------------
     hd = ["weights","lnp"] + names + ["chi2*"]
     rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
-    with open(f"{PATH}/{root}.ranges", "w") as f: 
+    with open(f"{self.paramsf}.ranges", "w") as f: 
       f.write(f"# {' '.join(hd)}\n")
       f.writelines(f"{n} {l:.5e} {h:.5e}\n" for n, l, h in rows)
 
@@ -206,14 +241,14 @@ class dataset:
     latex  = [param_info[x]['latex'] for x in names]
     names.append("chi2*")
     latex.append("\\chi^2")
-    np.savetxt(f"{PATH}/{root}.paramnames", 
+    np.savetxt(f"{self.paramsf}.paramnames", 
                np.column_stack((names,latex)),
                fmt="%s")
 
     # save a cov matrix --------------------------------------------------------
-    samples = loadMCSamples(f"{root}", settings={'ignore_rows': u'0.0'})
-    np.savetxt(f"{PATH}/{root}.covmat",
-               np.array(samples.cov(), dtype='float64'),
+    samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.0'})
+    np.savetxt(f"{self.paramsf}.covmat",
+               np.array(samples.cov(), copy=True, dtype=np.float64),
                fmt="%.9e",
                header=' '.join(names),
                comments="# ")
@@ -284,7 +319,7 @@ class dataset:
         comm.Barrier()
 
         if save:
-          np.save(self.datavectors_file, self.datavectors)
+          np.save(f"{self.dvsf}.npy", self.datavectors)
         print('(Datavectors) Done computing datavectors!')
 
       else:
@@ -363,13 +398,7 @@ class dataset:
 if __name__ == "__main__":
   comm = MPI.COMM_WORLD
   rank = comm.Get_rank()
-  ROOT = os.environ.get('ROOTDIR').rstrip('/')
-  PATH = f"{ROOT}/{args.root.rstrip('/')}"
-  fyaml = f"{PATH}/{args.yaml}"
-  print(f"INFO\nYAML: {args.yaml}\n"
-        f"mode: {args.mode}\n"
-        f"probe: {args.probe}\n")
-  gen = dataset(fyaml=fyaml, probe=args.probe, mode=args.mode)
+  generator = dataset()
   if (rank == 0):
     generator.run_mcmc()
     if not args.chain:
