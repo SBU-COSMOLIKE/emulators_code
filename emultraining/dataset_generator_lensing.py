@@ -316,6 +316,7 @@ class dataset:
     else:
     
       if (rank == 0):
+        
         status = MPI.Status()
         
         # First run: get data vector size
@@ -374,6 +375,7 @@ class dataset:
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
             comm.Abort(1)
+    
     return True
 
 #-------------------------------------------------------------------------------
