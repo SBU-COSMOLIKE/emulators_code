@@ -20,6 +20,7 @@ from getdist import loadMCSamples
 #    --yaml 'w0wa_takahashi_nobaryon_cs_CNN.yaml' \
 #    --datavsfile 'w0wa_takahashi_nobaryon_dvs_train' \
 #    --paramfile 'w0wa_params_train' \
+#    --failfile  'w0wa_params_failed_train' \
 #    --chain 1 \
 #    --maxcorr 0.15 
 #-------------------------------------------------------------------------------
@@ -76,11 +77,18 @@ parser.add_argument("--paramfile",
                     help="File to save parameters",
                     type=str,
                     required=True)
+parser.add_argument("--failfile",
+                    dest="failfile",
+                    help="File that tells which cosmo param fail to compute dvs",
+                    type=str,
+                    required=True)
 parser.add_argument("--maxcorr",
                     dest="maxcorr",
                     help="Max correlation allowed",
                     type=float,
                     default=0.15)
+
+
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -184,6 +192,7 @@ class dataset:
     self.dvsf = f"{root}/chains/{datavsfile}_{probe}"
     paramfile = Path(args.paramfile).stem
     self.paramsf = f"{root}/chains/{paramfile}_{probe}"
+    self.failf = f"{root}/chains/{failfile}_{probe}"
 
   #-----------------------------------------------------------------------------
   # likelihood
@@ -280,7 +289,7 @@ class dataset:
         )
     return np.array(likelihood.get_datavector(**param), copy=True, dtype=np.float32)
 
-  def generate_datavectors(self, save=True):
+  def generate_datavectors(self):
     TASK_TAG = 1
     STOP_TAG = 0
     RESULT_TAG = 2
@@ -323,10 +332,8 @@ class dataset:
           continue
         self.datavectors[idx] = dvs
       
-      keep = ~failed
-      datavectors = self.datavectors[keep]
-      if save:
-        np.save(f"{self.dvsf}.npy", datavectors)
+      np.save(f"{self.dvsf}.npy", self.datavectors)
+      np.savetxt(f"{self.failf}.txt", failed.astype(np.uint8), fmt="%d")
     
     else:
     
@@ -373,7 +380,6 @@ class dataset:
                                      status = status) # drain results 
           if kind == "err":
             failed[idx] = True
-            self.samples[idx,:] = 0.0
             self.datavectors[idx,:] = 0.0
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
@@ -385,11 +391,9 @@ class dataset:
                     tag = STOP_TAG) # we are done tag = 0
         comm.Barrier()  
         
-        keep = ~failed
-        datavectors = self.datavectors[keep]
-        if save:
-          np.save(f"{self.dvsf}.npy", datavectors)
-      
+        np.save(f"{self.dvsf}.npy", self.datavectors)
+        np.savetxt(f"{self.failf}.txt", failed.astype(np.uint8), fmt="%d")
+
       else:
       
         status = MPI.Status()
