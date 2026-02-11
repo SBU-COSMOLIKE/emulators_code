@@ -280,7 +280,7 @@ class dataset:
     size = comm.Get_size()
     nworkers = size - 1
     if rank == 0:
-      nparams = self.samples.shape[0]  # or: len(self.samples)
+      nparams = len(self.samples)
     else:
       nparams = None
     nparams = comm.bcast(nparams, root=0)
