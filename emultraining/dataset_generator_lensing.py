@@ -324,7 +324,7 @@ class dataset:
           print(f"Model number: {idx+1} (total: {nparams})")
         try:
           dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
-        except Exception: # set sample + datavector to zero and continue
+        except Exception: # set datavector to zero and continue
           failed[idx] = True
           self.datavectors[idx,:] = 0.0
           sys.stderr.write(f"[Rank 0] Worker 0 failed at idx={idx}\n")
@@ -362,7 +362,7 @@ class dataset:
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RESULT_TAG,
                                        status = status)
-            if kind == "err": # set sample + datavector to zero and continue
+            if kind == "err": # set datavector to zero and continue
               failed[idx] = True
               self.datavectors[idx,:] = 0.0
               src = status.Get_source()
