@@ -307,12 +307,15 @@ class dataset:
       self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
       self.datavectors[0] = dvs
 
+      failed = np.zeros(nparams, dtype=bool)
+      
       for idx in range(1, nparams):
         if idx % 10 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
         try:
           dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
         except Exception: # set sample + datavector to zero and continue
+          failed[idx] = True
           self.samples[idx,:] = 0.0
           self.datavectors[idx,:] = 0.0
           sys.stderr.write(f"[Rank 0] Worker 0 failed at idx={idx}\n")
@@ -320,9 +323,11 @@ class dataset:
           continue
         self.datavectors[idx] = dvs
       
+      keep = ~failed
+      datavectors = self.datavectors[keep]
       if save:
-        np.save(f"{self.dvsf}.npy", self.datavectors)
-  
+        np.save(f"{self.dvsf}.npy", datavectors)
+    
     else:
     
       if (rank == 0):
@@ -330,9 +335,18 @@ class dataset:
         status = MPI.Status()
         
         # First run: get data vector size
-        dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+        try:
+          dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+        except Exception:
+          sys.stderr.write(f"Failed in _compute_dvs_from_sample for idx=0\n" 
+                           f"Cannot determine datavector length\n"
+                           f"aborting MPI job\n")
+          sys.stderr.flush()
+          comm.Abort(1)
         self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
         self.datavectors[0] = dvs
+
+        failed = np.zeros(nparams, dtype=bool)
 
         for i in range(1, nparams):
           if i <= nworkers: # seed one task per active worker
@@ -342,6 +356,7 @@ class dataset:
                                        tag = RESULT_TAG,
                                        status = status)
             if kind == "err": # set sample + datavector to zero and continue
+              failed[idx] = True
               self.samples[idx,:] = 0.0
               self.datavectors[idx,:] = 0.0
               src = status.Get_source()
@@ -357,6 +372,7 @@ class dataset:
                                      tag = RESULT_TAG, 
                                      status = status) # drain results 
           if kind == "err":
+            failed[idx] = True
             self.samples[idx,:] = 0.0
             self.datavectors[idx,:] = 0.0
             src = status.Get_source()
@@ -368,8 +384,11 @@ class dataset:
                     dest = status.Get_source(), 
                     tag = STOP_TAG) # we are done tag = 0
         comm.Barrier()  
+        
+        keep = ~failed
+        datavectors = self.datavectors[keep]
         if save:
-          np.save(f"{self.dvsf}.npy", self.datavectors)
+          np.save(f"{self.dvsf}.npy", datavectors)
       
       else:
       
