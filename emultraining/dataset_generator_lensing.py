@@ -270,7 +270,7 @@ class dataset:
             dependency_params=[param[p] for p in z],
             cached=False
         )
-    return np.asarray(likelihood.get_datavector(**param))
+    return np.array(likelihood.get_datavector(**param), copy=True)
 
   def generate_datavectors(self, save=True):
     TASK_TAG = 1
@@ -295,7 +295,7 @@ class dataset:
           print(f"Model number: {idx+1} (total: {nparams})")
         dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
         if idx == 0:
-          self.datavectors = np.zeros((nparams, len(dvs)))
+          self.datavectors = np.empty((nparams, len(dvs)))
         self.datavectors[idx] = dvs
       if save:
         np.save(f"{self.dvsf}.npy", self.datavectors)
@@ -308,7 +308,7 @@ class dataset:
         
         # First run: get data vector size
         dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
-        self.datavectors = np.zeros((nparams, len(dvs)))
+        self.datavectors = np.empty((nparams, len(dvs)))
         self.datavectors[0] = dvs
 
         for i in range(1, nparams):
