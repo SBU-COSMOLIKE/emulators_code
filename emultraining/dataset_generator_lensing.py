@@ -386,7 +386,7 @@ class dataset:
             comm.send(("ok", idx, dvs), dest = 0, tag = RESULT_TAG)
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
-            comm.Abort(1)
+            continue
     
     return True
 
