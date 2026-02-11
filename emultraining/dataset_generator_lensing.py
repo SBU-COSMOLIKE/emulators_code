@@ -289,21 +289,23 @@ class dataset:
     likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
 
     if (size == 1):
-    
-      for idx in range(nparams):
+      
+      # First run: get data vector size
+      dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+      self.datavectors = np.empty((nparams, len(dvs)))
+      self.datavectors[0] = dvs
+
+      for idx in range(1, nparams):
         if idx % 10 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
         dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
-        if idx == 0:
-          self.datavectors = np.empty((nparams, len(dvs)))
         self.datavectors[idx] = dvs
       if save:
         np.save(f"{self.dvsf}.npy", self.datavectors)
-    
+  
     else:
     
       if (rank == 0):
-      
         status = MPI.Status()
         
         # First run: get data vector size
