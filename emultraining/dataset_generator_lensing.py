@@ -32,8 +32,7 @@ parser = argparse.ArgumentParser(prog='dataset_generator')
 parser.add_argument("--yaml",
                     dest="yaml",
                     help="The training YAML containing the training_args block",
-                    type=str,
-                    nargs='?')
+                    type=str)
 parser.add_argument("--root",
                     dest="root",
                     help="Project folder",
@@ -73,12 +72,10 @@ parser.add_argument("--temp",
 parser.add_argument("--datavsfile",
                     dest="datavsfile",
                     help="File to save data vectors",
-                    nargs='?',
                     type=str)
 parser.add_argument("--paramfile",
                     dest="paramfile",
                     help="File to save parameters",
-                    nargs='?',
                     type=str)
 parser.add_argument("--maxcorr",
                     dest="maxcorr",
@@ -100,10 +97,13 @@ class dataset:
     #---------------------------------------------------------------------------
     # Basic definitions
     #---------------------------------------------------------------------------
-    root = os.environ.get('ROOTDIR').rstrip('/')
+    root_env = os.environ.get("ROOTDIR")
+    if not root_env:
+      raise RuntimeError("ROOTDIR environment variable is not set")
+    root = root_env.rstrip("/")
     root = f"{root}/{args.root.rstrip('/')}"
     fileroot = f"{root}/{args.fileroot.rstrip('/')}"
-    
+    Path(f"{root}/chains").mkdir(parents=True, exist_ok=True)
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ class dataset:
     #---------------------------------------------------------------------------
     # Reorder fiducial
     self.fiducial = np.array([fid[p] for p in self.sampled_params], 
-                             copy=True, dtype=np.float64)
+                             copy=True, dtype=np.float32)
 
     # Reorder covmat
     pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
@@ -148,7 +148,7 @@ class dataset:
     
     # Reorder bounds
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
-                           copy=True, dtype=np.float64)[idx,:]    
+                           copy=True, dtype=np.float32)[idx,:]    
     #---------------------------------------------------------------------------
     # Reduce correlation on the covariance matrix to max = args.maxcorr
     #---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ class dataset:
     datavsfile = Path(args.datavsfile).stem
     self.dvsf = f"{root}/chains/{datavsfile}_{probe}"
     paramfile = Path(args.paramfile).stem
-    self.paramsf = f"{root}/chains/{args.paramfile}_{probe}"
+    self.paramsf = f"{root}/chains/{paramfile}_{probe}"
 
   #-----------------------------------------------------------------------------
   # likelihood
@@ -205,7 +205,7 @@ class dataset:
     nwalkers = int(3*ndim)
     nsteps   = int(max(7500, args.nparams/nwalkers)) # (for safety we assume tau>100)
     burnin   = int(0.3*nsteps)                       # 30% burn-in
-    thin     = int(float((nsteps-burnin)*nwalkers)/args.nparams)
+    thin     = max(1, int(float((nsteps-burnin)*nwalkers)/args.nparams))
 
     sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
                                     ndim = ndim, 
@@ -223,19 +223,19 @@ class dataset:
           f"nwalkers={nwalkers}\n"
           f"nsteps (per walker) = {nsteps}\n"
           f"nsteps/tau = {nsteps/tau} (min should be ~50)\n")
-    xf   = sampler.get_chain(flat=True, discard=burnin, thin=thin)
-    lnp  = sampler.get_log_prob(flat=True, discard=burnin, thin=thin)
-    w    = np.ones((len(xf), 1), dtype=np.float64)
+    xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
+    lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
+    w    = np.ones((len(xf), 1), dtype = np.float32)
     chi2 = -2*lnp
 
-    self.samples = xf # we just need the samples to compute the data vector
-
+    self.samples = np.array(xf, copy=True, dtype=np.float32)
+                           
     # save chain begins --------------------------------------------------------
     hd=f"nwalkers={nwalkers}\n"
     np.savetxt(f"{self.paramsf}.1.txt",
                np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
                fmt="%.9e",
-               header=hd + ''.join(["weights", "lnp"] + names),
+               header=hd + ' '.join(["weights", "lnp"] + names),
                comments="# ")
     
     # save a range files -------------------------------------------------------
@@ -280,7 +280,7 @@ class dataset:
             dependency_params=[param[p] for p in z],
             cached=False
         )
-    return np.array(likelihood.get_datavector(**param), copy=True)
+    return np.array(likelihood.get_datavector(**param), copy=True, dtype=np.float32)
 
   def generate_datavectors(self, save=True):
     TASK_TAG = 1
@@ -302,7 +302,7 @@ class dataset:
       
       # First run: get data vector size
       dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
-      self.datavectors = np.empty((nparams, len(dvs)))
+      self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
       self.datavectors[0] = dvs
 
       for idx in range(1, nparams):
@@ -320,7 +320,7 @@ class dataset:
         
         # First run: get data vector size
         dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
-        self.datavectors = np.empty((nparams, len(dvs)))
+        self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
         self.datavectors[0] = dvs
 
         for i in range(1, nparams):
@@ -374,7 +374,6 @@ class dataset:
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
             comm.Abort(1)
-    
     return True
 
 #-------------------------------------------------------------------------------
