@@ -153,8 +153,11 @@ class dataset:
     covmat = raw_covmat[np.ix_(idx, idx)]
     
     # Reorder bounds
+    names = list(self.model.parameterization.sampled_params().keys())
+    pidx = {p : i for i, p in enumerate(names)}
+    idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
-                           copy=True, dtype=np.float32)[idx,:]    
+                           copy=True, dtype=np.float32)[idx,:] 
     #---------------------------------------------------------------------------
     # Reduce correlation on the covariance matrix to max = args.maxcorr
     #---------------------------------------------------------------------------
@@ -189,11 +192,11 @@ class dataset:
     # Define output files
     #---------------------------------------------------------------------------
     datavsfile = Path(args.datavsfile).stem
-    self.dvsf = f"{root}/chains/{datavsfile}_{probe}"
+    self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{args.temp}"
     paramfile = Path(args.paramfile).stem
-    self.paramsf = f"{root}/chains/{paramfile}_{probe}"
+    self.paramsf = f"{root}/chains/{paramfile}_{probe}_{args.temp}"
     failfile = Path(args.failfile).stem
-    self.failf = f"{root}/chains/{failfile}_{probe}"
+    self.failf = f"{root}/chains/{failfile}_{probe}_{args.temp}"
 
   #-----------------------------------------------------------------------------
   # likelihood
