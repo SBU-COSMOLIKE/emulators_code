@@ -1,5 +1,5 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time
+import emcee, argparse, os, sys, scipy, yaml, time, traceback
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
@@ -55,7 +55,7 @@ parser.add_argument("--chain",
                     dest="chain",
                     help="only compute and output train/test/val chain",
                     nargs='?',
-                    type=bool,
+                    type=int,
                     default=True)
 parser.add_argument("--nparams",
                     dest="nparams",
@@ -109,7 +109,7 @@ class dataset:
     
     # preferred ordering of params
     self.sampled_params = yamlopts['train_args']['ord'][0]
-    
+
     # load fiducial data vector
     fid = yamlopts["train_args"]["fiducial"]
     
@@ -139,7 +139,6 @@ class dataset:
     # Reorder bounds
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
                            copy=True, dtype=np.float64)[idx,:]    
-
     #---------------------------------------------------------------------------
     # Reduce correlation on the covariance matrix to max = target
     #---------------------------------------------------------------------------
@@ -257,137 +256,106 @@ class dataset:
   #-----------------------------------------------------------------------------
   # datavectors
   #-----------------------------------------------------------------------------
+  def _compute_dvs_from_sample(self, likelihood, sample):
+    param = self.model.parameterization.to_input(
+        sampled_params_values=dict(zip(self.sampled_params, sample))
+    )
+    self.model.provider.set_current_input_params(param)
+
+    for (x, _), z in zip(self.model._component_order.items(),
+                         self.model._params_of_dependencies):
+        x.check_cache_and_compute(
+            params_values_dict={p: param[p] for p in x.input_params},
+            want_derived={},
+            dependency_params=[param[p] for p in z],
+            cached=False
+        )
+    return np.asarray(likelihood.get_datavector(**param))
+
   def generate_datavectors(self, save=True):
+    TASK_TAG = 1
+    STOP_TAG = 0
+    RESULT_TAG = 2
     rank = comm.Get_rank()
     size = comm.Get_size()
-    print('rank',rank,'is at barrier')
-    comm.Barrier()
-    start = time.time()
+    nworkers = size - 1
+    if rank == 0:
+      nparams = self.samples.shape[0]  # or: len(self.samples)
+    else:
+      nparams = None
+    nparams = comm.bcast(nparams, root=0)
+    if nparams <= nworkers:
+      raise RuntimeError(f"need nparams ({nparams}) > nworkers ({nworkers})")
     likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
 
-    if( size != 1 ):
-      if ( rank == 0 ):
-        # i want to get the datavector size. Make this flexible = do one computation beforehand.
-        input_params = self.model.parameterization.to_input(self.samples[0])
+    if (size == 1):
+      for idx in range(nparams):
+        if idx % 10 == 0:
+          print(f"Model number: {idx+1} (total: {nparams})")
+        dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
+        if idx == 0:
+          self.datavectors = np.zeros((nparams, len(dvs)))
+        self.datavectors[idx] = dvs
+      if save:
+        np.save(f"{self.dvsf}.npy", self.datavectors)
+    else:
+      if (rank == 0):
+        status = MPI.Status()
+        
+        # First run: get data vector size
+        dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+        self.datavectors = np.zeros((nparams, len(dvs)))
+        self.datavectors[0] = dvs
 
-        self.model.provider.set_current_input_params(input_params)
-
-        for (component, like_index), param_dep in zip(self.model._component_order.items(),
-                                                            self.model._params_of_dependencies):
-
-          depend_list = [input_params[p] for p in param_dep]
-          params = {p: input_params[p] for p in component.input_params}
-          compute_success = component.check_cache_and_compute(
-                  params, want_derived={},
-                  dependency_params=depend_list, cached=False)
-
-        datavector = likelihood.get_datavector(**input_params)
-
-        self.datavectors = np.zeros((len(self.samples),len(datavector)),dtype='float32')
-
-        # rank 0 is a manager. It distributes the computations to the workers with rank > 0
-        # initialize
-        num_sent = 0
-        loop_arr = np.arange(0,len(self.samples),1,dtype=int)
-
-        #send the initial data
-        print('(Datavectors) Begin computing datavectors...')
-        sys.stdout.flush()
-        for i in tqdm(range(0,len(self.samples))):
-          sys.stdout.flush()
-          status = MPI.Status()
-
-          if i in range(0,min(size-1,len(self.samples)-1)):
-            comm.send([loop_arr[i],self.samples[i]], dest=i+1, tag=1)
-
+        for i in range(1, nparams):
+          if i <= nworkers: # seed one task per active worker
+            comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
           else:
-            idx,datavector = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
-            self.datavectors[idx] = datavector
-            compute_rank = status.Get_source()
-            comm.send([loop_arr[i],self.samples[i]],dest=compute_rank,tag=1)
-          sys.stdout.flush()
-
-        #communicate to workers that everything is done
-        for i in range(1,size):
-          idx,datavector = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
-          self.datavectors[idx] = datavector
-          compute_rank = status.Get_source()
-          # print('sending stop to rank',compute_rank)
-          comm.send([0,self.samples[0]],dest=compute_rank,tag=0)
-
-        # barrier to wait signal workers to to move forard.
-        comm.Barrier()
-
+            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
+                                       tag = RESULT_TAG,
+                                       status = status)
+            if kind == "err":
+              src = status.Get_source()
+              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+              sys.stderr.flush()
+              comm.Abort(1)   
+            else:
+              self.datavectors[idx] = dvs 
+            comm.send((i, self.samples[i]), 
+                      dest = status.Get_source(), 
+                      tag  = TASK_TAG)
+        for _ in range(nworkers):  
+          kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
+                                     tag = RESULT_TAG, 
+                                     status = status) # drain results 
+          if kind == "err":
+            src = status.Get_source()
+            sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+            sys.stderr.flush()
+            comm.Abort(1)   
+          else:
+            self.datavectors[idx] = dvs 
+          comm.send((0, None), 
+                    dest = status.Get_source(), 
+                    tag = STOP_TAG) # we are done tag = 0
+        comm.Barrier()  
         if save:
           np.save(f"{self.dvsf}.npy", self.datavectors)
-        print('(Datavectors) Done computing datavectors!')
-
       else:
-        # anything not rank=0 is a worker. It recieves the index of the sample to compute.
-        # Each worker will return its index to the manager so that it can recieve 
-        # the next available index. The manager always sends with tag=1 unless all computations 
-        # have already been distributed, in which case it will send tag=0.
         status = MPI.Status()
-        while ( True ):
-          # get the information from the manager
-          idx,sample = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
-          print('idx =',idx,'| rank =',rank,'| runtime =',time.time()-start)
-          #print('')
-
-          # check if there is work to be done
-          if ( status.Get_tag()==0 ):
-            # if work is done, barrier to wait for other workers
-            comm.Barrier()
+        while (True):
+          idx, sample = comm.recv(source = 0, 
+                                  tag = MPI.ANY_TAG, 
+                                  status = status)
+          if (status.Get_tag() == STOP_TAG):
+            comm.Barrier() # if work is done (tag = 0), wait for other workers
             break
-
-          # else do the work
-          print(rank, sample)
-          input_params = self.model.parameterization.to_input(sample)
-          self.model.provider.set_current_input_params(input_params)
-
-          for (component, like_index), param_dep in zip(self.model._component_order.items(),
-                                                              self.model._params_of_dependencies):
-
-            depend_list = [input_params[p] for p in param_dep]
-            params = {p: input_params[p] for p in component.input_params}
-            compute_success = component.check_cache_and_compute(
-                      params, want_derived={},
-                      dependency_params=depend_list, cached=False)
-
-          datavector = likelihood.get_datavector(**input_params)
-
-          comm.send([idx,datavector], dest=0, tag=rank)
-
-    else:
-      input_params = self.model.parameterization.to_input(self.samples[0])
-      self.model.provider.set_current_input_params(input_params)
-
-      for (component, like_index), param_dep in zip(self.model._component_order.items(),
-                                                          self.model._params_of_dependencies):
-
-        depend_list = [input_params[p] for p in param_dep]
-        params = {p: input_params[p] for p in component.input_params}
-        compute_success = component.check_cache_and_compute(
-                params, want_derived={},
-                dependency_params=depend_list, cached=False)
-
-      datavector = likelihood.get_datavector(**input_params)
-      self.datavectors = np.zeros((len(self.samples),len(datavector)))
-
-      for idx in tqdm(range(len(self.samples))):
-        input_params = self.model.parameterization.to_input(self.samples[idx])
-        self.model.provider.set_current_input_params(input_params)
-
-        for (component, like_index), param_dep in zip(self.model._component_order.items(),
-                                                            self.model._params_of_dependencies):
-
-          depend_list = [input_params[p] for p in param_dep]
-          params = {p: input_params[p] for p in component.input_params}
-          compute_success = component.check_cache_and_compute(
-                    params, want_derived={},
-                    dependency_params=depend_list, cached=False)
-
-        self.datavectors[idx] = likelihood.get_datavector(**input_params)
+          try:
+            dvs = self._compute_dvs_from_sample(likelihood, sample)
+            comm.send(("ok", idx, dvs), dest = 0, tag = RESULT_TAG)
+          except Exception:
+            comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
+            comm.Abort(1)
     return True
 
 #-------------------------------------------------------------------------------
@@ -401,10 +369,10 @@ if __name__ == "__main__":
   generator = dataset()
   if (rank == 0):
     generator.run_mcmc()
-    if not args.chain:
+    if not args.chain == 1:
       generator.generate_datavectors()
   else:
-    if not args.chain:
+    if not args.chain == 1:
       generator.generate_datavectors()
   MPI.Finalize()
   exit(0)
