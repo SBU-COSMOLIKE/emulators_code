@@ -96,11 +96,13 @@ class dataset:
     root = os.environ.get('ROOTDIR').rstrip('/')
     root = f"{root}/{args.root.rstrip('/')}"
     fileroot = f"{root}/{args.fileroot.rstrip('/')}"
+    
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
     info = yaml_load(f"{fileroot}/{args.yaml}")
     self.model = get_model(info)
+    
     #---------------------------------------------------------------------------
     # Load yaml again (for reading options)
     #---------------------------------------------------------------------------
@@ -121,6 +123,7 @@ class dataset:
     
     # load probe suffix
     probe = yamlopts["train_args"]["probe"]
+    
     #---------------------------------------------------------------------------
     # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
     #---------------------------------------------------------------------------
