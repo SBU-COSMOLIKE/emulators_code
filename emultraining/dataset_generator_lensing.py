@@ -274,11 +274,13 @@ class dataset:
   #-----------------------------------------------------------------------------
   # datavectors
   #-----------------------------------------------------------------------------
-  def _compute_dvs_from_sample(self, likelihood, sample):
+  def _compute_dvs_from_sample(self, sample):
     param = self.model.parameterization.to_input(
         sampled_params_values=dict(zip(self.sampled_params, sample))
     )
     self.model.provider.set_current_input_params(param)
+    
+    likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
 
     for (x, _), z in zip(self.model._component_order.items(),
                          self.model._params_of_dependencies):
@@ -304,13 +306,12 @@ class dataset:
     nparams = comm.bcast(nparams, root=0)
     if nparams <= nworkers:
       raise RuntimeError(f"need nparams ({nparams}) > nworkers ({nworkers})")
-    likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
-
+    
     if (size == 1):
       
       # First run: get data vector size
       try:
-        dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+        dvs = self._compute_dvs_from_sample(self.samples[0])
       except Exception:
         raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
                            f"Cannot determine datavector length.")
@@ -323,7 +324,7 @@ class dataset:
         if idx % 10 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
         try:
-          dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
+          dvs = self._compute_dvs_from_sample(self.samples[idx])
         except Exception: # set datavector to zero and continue
           failed[idx] = True
           self.datavectors[idx,:] = 0.0
@@ -343,7 +344,7 @@ class dataset:
         
         # First run: get data vector size
         try:
-          dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+          dvs = self._compute_dvs_from_sample(self.samples[0])
         except Exception:
           sys.stderr.write(f"Failed in _compute_dvs_from_sample for idx=0\n" 
                            f"Cannot determine datavector length\n"
@@ -404,7 +405,7 @@ class dataset:
             comm.Barrier() # if work is done (tag = 0), wait for other workers
             break
           try:
-            dvs = self._compute_dvs_from_sample(likelihood, sample)
+            dvs = self._compute_dvs_from_sample(sample)
             comm.send(("ok", idx, dvs), dest = 0, tag = RESULT_TAG)
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
