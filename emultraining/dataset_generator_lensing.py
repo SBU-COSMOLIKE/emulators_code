@@ -20,7 +20,8 @@ from getdist import loadMCSamples
 #    --yaml 'w0wa_takahashi_nobaryon_cs_CNN.yaml' \
 #    --datavsfile 'w0wa_takahashi_nobaryon_dvs_train' \
 #    --paramfile 'w0wa_params_train' \
-#    --chain 1 
+#    --chain 1 \
+#    --maxcorr 0.15 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -79,6 +80,12 @@ parser.add_argument("--paramfile",
                     help="File to save parameters",
                     nargs='?',
                     type=str)
+parser.add_argument("--maxcorr",
+                    dest="maxcorr",
+                    help="Max correlation allowed",
+                    nargs='?',
+                    type=float,
+                    default=0.15)
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -89,7 +96,7 @@ class dataset:
   #-----------------------------------------------------------------------------
   # init
   #-----------------------------------------------------------------------------  
-  def __init__(self, target=0.15):
+  def __init__():
     #---------------------------------------------------------------------------
     # Basic definitions
     #---------------------------------------------------------------------------
@@ -143,14 +150,15 @@ class dataset:
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
                            copy=True, dtype=np.float64)[idx,:]    
     #---------------------------------------------------------------------------
-    # Reduce correlation on the covariance matrix to max = target
+    # Reduce correlation on the covariance matrix to max = args.maxcorr
     #---------------------------------------------------------------------------
+    print(args.maxcorr)
     sig   = np.sqrt(np.diag(covmat))
     n = len(sig)
     outer = np.outer(sig, sig)
     corr  = covmat / outer 
     m = np.abs(corr - np.eye(n)).max()
-    corr /= max(1.0, m / target) if m > 0 else 1.0
+    corr /= max(1.0, m / args.maxcorr) if m > 0 else 1.0
     np.fill_diagonal(corr, 1.0)
     covmat = corr * outer
 
