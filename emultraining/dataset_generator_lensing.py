@@ -346,8 +346,7 @@ class dataset:
               self.datavectors[idx,:] = 0.0
               src = status.Get_source()
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
-              sys.stderr.flush()
-              continue 
+              sys.stderr.flush() 
             else:
               self.datavectors[idx] = dvs 
             comm.send((i, self.samples[i]), 
@@ -363,7 +362,6 @@ class dataset:
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
             sys.stderr.flush()
-            continue
           else:
             self.datavectors[idx] = dvs 
           comm.send((0, None), 
