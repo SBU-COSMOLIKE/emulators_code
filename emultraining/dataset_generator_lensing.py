@@ -216,8 +216,8 @@ class dataset:
     nwalkers = int(3*ndim)
     nsteps   = int(max(7500, args.nparams/nwalkers)) # (for safety we assume tau>100)
     burnin   = int(0.3*nsteps)                       # 30% burn-in
-    thin     = max(1, int(float((nsteps-burnin)*nwalkers)/args.nparams))
-
+    thin     = max(1,int(float((nsteps-burnin)*nwalkers)/args.nparams)-1)
+    
     sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
                                     ndim = ndim, 
                                     moves=[(emcee.moves.DEMove(), 0.8),
@@ -324,7 +324,7 @@ class dataset:
       failed = np.zeros(nparams, dtype=bool)
       
       for idx in range(1, nparams):
-        if idx % 10 == 0:
+        if idx % 20 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
         try:
           dvs = self._compute_dvs_from_sample(self.samples[idx])
@@ -360,9 +360,12 @@ class dataset:
         failed = np.zeros(nparams, dtype=bool)
 
         for i in range(1, nparams):
+          if i % 20 == 0:
+            print(f"Model number: {i+1} (total: {nparams})", flush=True)
           if i <= nworkers: # seed one task per active worker
             comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
           else:
+            # ANY_SOURCE: wait for whichever worker finishes next (dynamically scheduling)
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RESULT_TAG,
                                        status = status)
