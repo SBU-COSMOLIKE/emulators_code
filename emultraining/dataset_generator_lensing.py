@@ -299,15 +299,27 @@ class dataset:
     if (size == 1):
       
       # First run: get data vector size
-      dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+      try:
+        dvs = self._compute_dvs_from_sample(likelihood, self.samples[0])
+      except Exception:
+        raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
+                           f"Cannot determine datavector length.")
       self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
       self.datavectors[0] = dvs
 
       for idx in range(1, nparams):
         if idx % 10 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
-        dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
+        try:
+          dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
+        except Exception: # set sample + datavector to zero and continue
+          self.samples[idx,:] = 0.0
+          self.datavectors[idx,:] = 0.0
+          sys.stderr.write(f"[Rank 0] Worker 0 failed at idx={idx}\n")
+          sys.stderr.flush()
+          continue
         self.datavectors[idx] = dvs
+      
       if save:
         np.save(f"{self.dvsf}.npy", self.datavectors)
   
@@ -329,11 +341,13 @@ class dataset:
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RESULT_TAG,
                                        status = status)
-            if kind == "err":
+            if kind == "err": # set sample + datavector to zero and continue
+              self.samples[idx,:] = 0.0
+              self.datavectors[idx,:] = 0.0
               src = status.Get_source()
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
               sys.stderr.flush()
-              comm.Abort(1)   
+              continue 
             else:
               self.datavectors[idx] = dvs 
             comm.send((i, self.samples[i]), 
@@ -347,7 +361,7 @@ class dataset:
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
             sys.stderr.flush()
-            comm.Abort(1)   
+            continue
           else:
             self.datavectors[idx] = dvs 
           comm.send((0, None), 
