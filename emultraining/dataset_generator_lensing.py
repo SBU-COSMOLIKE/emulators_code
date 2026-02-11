@@ -32,55 +32,53 @@ parser = argparse.ArgumentParser(prog='dataset_generator')
 parser.add_argument("--yaml",
                     dest="yaml",
                     help="The training YAML containing the training_args block",
-                    type=str)
+                    type=str,
+                    required=True)
 parser.add_argument("--root",
                     dest="root",
                     help="Project folder",
                     type=str,
-                    nargs='?',
-                    default="projects/example/")
+                    required=True)
 parser.add_argument("--fileroot",
                     dest="fileroot",
                     help="Subfolder of Project folder where we find yaml and fisher",
                     type=str,
-                    nargs='?',
-                    default="projects/example/emulators")
+                    required=True)
 parser.add_argument("--mode",
                     dest="mode",
                     help="generation mode = [train, valid, test]",
                     type=str,
-                    nargs='?',
+                    choices=["train","valid","test"],
                     default='train')
 parser.add_argument("--chain",
                     dest="chain",
                     help="only compute and output train/test/val chain",
-                    nargs='?',
                     type=int,
-                    default=True)
+                    choices=[0,1],
+                    default=1)
 parser.add_argument("--nparams",
                     dest="nparams",
                     help="Number of Parameters to Generate",
-                    nargs='?',
                     type=int,
                     default=100000)
 parser.add_argument("--temp",
                     dest="temp",
                     help="Number of Parameters to Generate",
-                    nargs='?',
                     type=int,
                     default=128)
 parser.add_argument("--datavsfile",
                     dest="datavsfile",
                     help="File to save data vectors",
-                    type=str)
+                    type=str,
+                    required=True)
 parser.add_argument("--paramfile",
                     dest="paramfile",
                     help="File to save parameters",
-                    type=str)
+                    type=str,
+                    required=True)
 parser.add_argument("--maxcorr",
                     dest="maxcorr",
                     help="Max correlation allowed",
-                    nargs='?',
                     type=float,
                     default=0.15)
 args, unknown = parser.parse_known_args()
