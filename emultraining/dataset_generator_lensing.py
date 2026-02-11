@@ -289,6 +289,7 @@ class dataset:
     likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
 
     if (size == 1):
+    
       for idx in range(nparams):
         if idx % 10 == 0:
           print(f"Model number: {idx+1} (total: {nparams})")
@@ -298,8 +299,11 @@ class dataset:
         self.datavectors[idx] = dvs
       if save:
         np.save(f"{self.dvsf}.npy", self.datavectors)
+    
     else:
+    
       if (rank == 0):
+      
         status = MPI.Status()
         
         # First run: get data vector size
@@ -341,7 +345,9 @@ class dataset:
         comm.Barrier()  
         if save:
           np.save(f"{self.dvsf}.npy", self.datavectors)
+      
       else:
+      
         status = MPI.Status()
         while (True):
           idx, sample = comm.recv(source = 0, 
@@ -356,6 +362,7 @@ class dataset:
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
             comm.Abort(1)
+    
     return True
 
 #-------------------------------------------------------------------------------
