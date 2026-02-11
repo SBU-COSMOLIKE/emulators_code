@@ -326,7 +326,6 @@ class dataset:
           dvs = self._compute_dvs_from_sample(likelihood, self.samples[idx])
         except Exception: # set sample + datavector to zero and continue
           failed[idx] = True
-          self.samples[idx,:] = 0.0
           self.datavectors[idx,:] = 0.0
           sys.stderr.write(f"[Rank 0] Worker 0 failed at idx={idx}\n")
           sys.stderr.flush()
@@ -365,7 +364,6 @@ class dataset:
                                        status = status)
             if kind == "err": # set sample + datavector to zero and continue
               failed[idx] = True
-              self.samples[idx,:] = 0.0
               self.datavectors[idx,:] = 0.0
               src = status.Get_source()
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
