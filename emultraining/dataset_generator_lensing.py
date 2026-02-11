@@ -192,6 +192,7 @@ class dataset:
     self.dvsf = f"{root}/chains/{datavsfile}_{probe}"
     paramfile = Path(args.paramfile).stem
     self.paramsf = f"{root}/chains/{paramfile}_{probe}"
+    failfile = Path(args.failfile).stem
     self.failf = f"{root}/chains/{failfile}_{probe}"
 
   #-----------------------------------------------------------------------------
