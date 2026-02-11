@@ -358,6 +358,8 @@ class dataset:
                                      tag = RESULT_TAG, 
                                      status = status) # drain results 
           if kind == "err":
+            self.samples[idx,:] = 0.0
+            self.datavectors[idx,:] = 0.0
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
             sys.stderr.flush()
