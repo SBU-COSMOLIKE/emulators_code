@@ -398,8 +398,8 @@ class dataset:
             too_frequent = False
 
           if not too_frequent:
-            start = (next_block - 1) * block
-            end   = min(nparams, next_block * block)
+            start = (next_block - 1) * 10000
+            end   = min(nparams, next_block * 10000)
             if completed[start:end].all():
               print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
               np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
