@@ -352,7 +352,11 @@ class dataset:
       if (rank == 0):
         
         status = MPI.Status()
-        
+        failed = np.zeros(nparams, dtype=bool)
+        completed = np.zeros(nparams, dtype=bool)
+        next_block = 1 
+        too_frequent = True
+
         # First run: get data vector size
         try:
           dvs = self._compute_dvs_from_sample(self.samples[0])
@@ -364,11 +368,9 @@ class dataset:
           comm.Abort(1)
         self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
         self.datavectors[0] = dvs
+        completed[0] = True
+        failed[0] = False
 
-        failed = np.zeros(nparams, dtype=bool)
-        completed = np.zeros(nparams, dtype=bool)
-        next_block = 1 
-        too_frequent = True
         for i in range(1, nparams):
           if i <= nworkers: # seed one task per active worker
             comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
@@ -406,7 +408,7 @@ class dataset:
               os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")  
               too_frequent = True
               next_block += 1
-              
+
         for _ in range(nworkers):  
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                      tag = RESULT_TAG, 
