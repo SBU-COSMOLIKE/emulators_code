@@ -368,8 +368,6 @@ class dataset:
         failed = np.zeros(nparams, dtype=bool)
 
         for i in range(1, nparams):
-          if i % 20 == 0:
-            print(f"Model number: {i+1} (total: {nparams})", flush=True)
           if i <= nworkers: # seed one task per active worker
             comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
           else:
@@ -389,7 +387,8 @@ class dataset:
                       dest = status.Get_source(), 
                       tag  = TASK_TAG)
 
-          if idx % 10000 == 0:
+          if i % 10000 == 0:
+            print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
             np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
             np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
             os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
