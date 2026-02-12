@@ -366,7 +366,9 @@ class dataset:
         self.datavectors[0] = dvs
 
         failed = np.zeros(nparams, dtype=bool)
-
+        completed = np.zeros(nparams, dtype=bool)
+        next_block = 1 
+        too_frequent = True
         for i in range(1, nparams):
           if i <= nworkers: # seed one task per active worker
             comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
@@ -376,24 +378,35 @@ class dataset:
                                        tag = RESULT_TAG,
                                        status = status)
             if kind == "err": # set datavector to zero and continue
-              failed[idx] = True
               self.datavectors[idx,:] = 0.0
               src = status.Get_source()
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
               sys.stderr.flush() 
+              failed[idx] = True
+              completed[idx] = True
             else:
               self.datavectors[idx] = dvs 
+              completed[idx] = True
+              failed[idx] = False
             comm.send((i, self.samples[i]), 
                       dest = status.Get_source(), 
                       tag  = TASK_TAG)
+          
+          if i%10000 == 0:
+            too_frequent = False
 
-          if i % 10000 == 0:
-            print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
-            np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-            np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
-            os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
-            os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")  
-
+          if not too_frequent:
+            start = (next_block - 1) * block
+            end   = min(nparams, next_block * block)
+            if completed[start:end].all():
+              print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
+              np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+              np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
+              os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+              os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")  
+              too_frequent = True
+              next_block += 1
+              
         for _ in range(nworkers):  
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                      tag = RESULT_TAG, 
