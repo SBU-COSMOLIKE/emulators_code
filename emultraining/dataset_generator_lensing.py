@@ -325,7 +325,7 @@ class dataset:
       
       for idx in range(1, nparams):
         if idx % 20 == 0:
-          print(f"Model number: {idx+1} (total: {nparams})")
+          print(f"Model number: {idx+1} (total: {nparams})", flush=True)
         try:
           dvs = self._compute_dvs_from_sample(self.samples[idx])
         except Exception: # set datavector to zero and continue
@@ -335,9 +335,17 @@ class dataset:
           sys.stderr.flush()
           continue
         self.datavectors[idx] = dvs
+
+        if idx % 5000 == 0:
+          np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+          np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
+          os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+          os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
       
-      np.save(f"{self.dvsf}.npy", self.datavectors)
-      np.savetxt(f"{self.failf}.txt", failed.astype(np.uint8), fmt="%d")
+      np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+      np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
+      os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+      os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")     
     
     else:
     
@@ -380,6 +388,13 @@ class dataset:
             comm.send((i, self.samples[i]), 
                       dest = status.Get_source(), 
                       tag  = TASK_TAG)
+
+          if idx % 10000 == 0:
+            np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+            np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
+            os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+            os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")  
+
         for _ in range(nworkers):  
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                      tag = RESULT_TAG, 
@@ -397,8 +412,10 @@ class dataset:
                     tag = STOP_TAG) # we are done tag = 0
         comm.Barrier()  
         
-        np.save(f"{self.dvsf}.npy", self.datavectors)
-        np.savetxt(f"{self.failf}.txt", failed.astype(np.uint8), fmt="%d")
+        np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+        np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
+        os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+        os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")     
 
       else:
       
