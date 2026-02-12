@@ -352,6 +352,7 @@ class dataset:
       if (rank == 0):
         
         status = MPI.Status()
+        block = 10000
         failed = np.zeros(nparams, dtype=bool)
         completed = np.zeros(nparams, dtype=bool)
         next_block = 1 
@@ -394,12 +395,12 @@ class dataset:
                       dest = status.Get_source(), 
                       tag  = TASK_TAG)
           
-          if i%10000 == 0:
+          if i%block == 0:
             too_frequent = False
 
           if not too_frequent:
-            start = (next_block - 1) * 10000
-            end   = min(nparams, next_block * 10000)
+            start = (next_block - 1) * block
+            end   = min(nparams, next_block * block)
             if completed[start:end].all():
               print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
               np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
