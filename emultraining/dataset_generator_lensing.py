@@ -6,6 +6,7 @@ from mpi4py import MPI
 from tqdm import tqdm
 from pathlib import Path
 from getdist import loadMCSamples
+from collections import deque
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Example how to run this program
@@ -14,15 +15,16 @@ from getdist import loadMCSamples
 #mpirun -n 2 --oversubscribe \
 #  python external_modules/code/emulators/emultrf/emultraining/dataset_generator_lensing.py \
 #    --root projects/roman_real/  \
-#    --fileroot emulators/w0wa_nla_halofit_cosmic_shear_cnn/ \
+#    --fileroot emulators/nla_cosmic_shear/ \
 #    --nparams 1000 \
 #    --temp 128 \
-#    --yaml 'w0wa_takahashi_nobaryon_cs_CNN.yaml' \
-#    --datavsfile 'w0wa_takahashi_nobaryon_dvs_train' \
-#    --paramfile 'w0wa_params_train' \
+#    --yaml 'w0wa_takahashi_cs_CNN.yaml' \
+#    --datavsfile 'w0wa_takahashi_dvs_train' \
+#    --paramfile 'w0wa_takahashi_params_train' \
 #    --failfile  'w0wa_params_failed_train' \
 #    --chain 1 \
-#    --maxcorr 0.15 
+#    --maxcorr 0.15 \
+#    --loadchk 1
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -87,8 +89,11 @@ parser.add_argument("--maxcorr",
                     help="Max correlation allowed",
                     type=float,
                     default=0.15)
-
-
+parser.add_argument("--loadchk",
+                    dest="loadchk",
+                    help="Load from chk if exists",
+                    type=int,
+                    choices=[0,1])
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -100,6 +105,36 @@ class dataset:
   # init
   #-----------------------------------------------------------------------------  
   def __init__(self):
+    self.failed = None        # track which models failed to compute dv
+    self.loadchk = False      # load checkpoint if available
+    self.loadsamples = False  # loaded samples sucessfully
+    self.model = None
+    self.sampled_params = None 
+    self.fiducial = None
+    self.bounds = None
+    self.covmat = None 
+    self.inv_covmat = None 
+    self.dvsf = None 
+    self.paramsf = None 
+    self.failf = None
+    self.setup = False
+    
+    self.__setup_flags()
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    if rank == 0:
+      if args.loadchk:
+        self.__load_chk()
+      if not self.loadchk:
+        self.__run_mcmc()
+      if not args.chain == 1:
+        self.__generate_datavectors()
+    else:
+      if not args.chain == 1:
+        self.__generate_datavectors()
+
+  def __setup_flags(self):
     #---------------------------------------------------------------------------
     # Basic definitions
     #---------------------------------------------------------------------------
@@ -110,6 +145,9 @@ class dataset:
     root = f"{root}/{args.root.rstrip('/')}"
     fileroot = f"{root}/{args.fileroot.rstrip('/')}"
     Path(f"{root}/chains").mkdir(parents=True, exist_ok=True)
+    self.failed = None        # track which models failed to compute dv
+    self.loadchk = False      # load checkpoint if available
+    self.loadsamples = False  # loaded samples sucessfully
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -197,19 +235,62 @@ class dataset:
     self.paramsf = f"{root}/chains/{paramfile}_{probe}_{args.temp}"
     failfile = Path(args.failfile).stem
     self.failf = f"{root}/chains/{failfile}_{probe}_{args.temp}"
+    
+    #---------------------------------------------------------------------------
+    # Setup Done
+    #---------------------------------------------------------------------------
+    self.setup = True
 
   #-----------------------------------------------------------------------------
   # likelihood
   #-----------------------------------------------------------------------------
-  def param_logpost(self,x):
+  def __param_logpost(self,x):
     y = x - self.fiducial
     logprior = self.model.prior.logp(x)
     return (-0.5*(y @ self.inv_covmat @ y) + logprior)/args.temp
 
   #-----------------------------------------------------------------------------
+  # save/load checkpoint
+  #-----------------------------------------------------------------------------
+  def __load_chk(self):
+    self.loadchk = all([os.path.isfile(x) for x in [f"{self.dvsf}.npy", 
+                                                    f"{self.failf}.txt",
+                                                    f"{self.paramsf}.covmat", 
+                                                    f"{self.paramsf}.ranges",
+                                                    f"{self.paramsf}.1.txt"]])
+    if self.loadchk:
+      # row 0/1 rows are weights, lnp. Last row is chi2
+      self.samples = np.atleast_2d(np.loadtxt(f"{self.paramsf}.1.txt", 
+                                              dtype=np.float32))[:,2:-1]
+      if self.samples.ndim != 2:
+        raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
+      
+      self.failed = np.loadtxt(f"{self.failf}.txt", dtype=np.uint8)
+      self.failed = np.asarray(self.failed).astype(bool)
+      if self.failed.ndim != 1:
+        raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
+      
+      if self.samples.shape[0] != self.failed.shape[0]:
+        raise ValueError(f"Incompatible samples/failed chk files")
+
+      self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+      if self.datavectors.ndim != 2:
+        raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
+      if self.datavectors.shape[0] != self.samples.shape[0]:
+        raise ValueError(f"Incompatible samples/datavectir chk files")
+      self.loadsamples = True
+    return self.loadchk
+  
+  def __save_chk(self):
+    np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+    np.savetxt(f"{self.failf}.tmp.txt", self.failed.astype(np.uint8), fmt="%d")
+    os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+    os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
+
+  #-----------------------------------------------------------------------------
   # run mcmc
   #-----------------------------------------------------------------------------
-  def run_mcmc(self):
+  def __run_mcmc(self):
     ndim     = len(self.sampled_params)
     names    = list(self.sampled_params)
     bds      = self.bounds
@@ -222,14 +303,14 @@ class dataset:
                                     ndim = ndim, 
                                     moves=[(emcee.moves.DEMove(), 0.8),
                                            (emcee.moves.DESnookerMove(), 0.2)],
-                                    log_prob_fn = self.param_logpost)
+                                    log_prob_fn = self.__param_logpost)
     sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
                                      0.5*np.sqrt(np.diag(self.covmat))*
                                      np.random.normal(size=(nwalkers, ndim)), 
                      nsteps=nsteps, 
                      progress=False)
     tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                   copy=True, dtype=np.float64).max()
+                   copy=True, dtype=np.float32).max()
     print(f"Partial Result: tau = {tau}\n"
           f"nwalkers={nwalkers}\n"
           f"nsteps (per walker) = {nsteps}\n"
@@ -264,7 +345,6 @@ class dataset:
     np.savetxt(f"{self.paramsf}.paramnames", 
                np.column_stack((names,latex)),
                fmt="%s")
-
     # save a cov matrix --------------------------------------------------------
     samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.0'})
     np.savetxt(f"{self.paramsf}.covmat",
@@ -272,7 +352,8 @@ class dataset:
                fmt="%.9e",
                header=' '.join(names),
                comments="# ")
-    return True
+    self.loadsamples = True
+    return self.loadsamples
   
   #-----------------------------------------------------------------------------
   # datavectors
@@ -295,142 +376,155 @@ class dataset:
         )
     return np.array(likelihood.get_datavector(**param), copy=True, dtype=np.float32)
 
-  def generate_datavectors(self):
+  def __generate_datavectors(self):
+    if not self.setup:
+      raise RuntimeError(f"Initial Setup not successful")
     TASK_TAG = 1
     STOP_TAG = 0
     RESULT_TAG = 2
     rank = comm.Get_rank()
     size = comm.Get_size()
     nworkers = size - 1
-    if rank == 0:
-      nparams = len(self.samples)
-    else:
-      nparams = None
-    nparams = comm.bcast(nparams, root=0)
-    if nparams <= nworkers:
-      raise RuntimeError(f"need nparams ({nparams}) > nworkers ({nworkers})")
-    
-    if (size == 1):
-      
-      # First run: get data vector size
-      try:
-        dvs = self._compute_dvs_from_sample(self.samples[0])
-      except Exception:
-        raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
-                           f"Cannot determine datavector length.")
-      self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
-      self.datavectors[0] = dvs
-
-      failed = np.zeros(nparams, dtype=bool)
-      
-      for idx in range(1, nparams):
-        try:
-          dvs = self._compute_dvs_from_sample(self.samples[idx])
-        except Exception: # set datavector to zero and continue
-          failed[idx] = True
-          self.datavectors[idx,:] = 0.0
-          sys.stderr.write(f"[Rank 0] Worker 0 failed at idx={idx}\n")
-          sys.stderr.flush()
-          continue
-        self.datavectors[idx] = dvs
-
-        if idx % 2500 == 0:
-          print(f"Model number: {idx+1} (total: {nparams}) - checkpoint", flush=True)
-          np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-          np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
-          os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
-          os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
-      
-      np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-      np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
-      os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
-      os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")     
-    
-    else:
-    
-      if (rank == 0):
         
-        status = MPI.Status()
-        block = 10000
-        failed = np.zeros(nparams, dtype=bool)
-        completed = np.zeros(nparams, dtype=bool)
-        next_block = 1 
-        too_frequent = True
+    if size == 1:
+      if not self.loadsamples:
+        raise RuntimeError(f"Model Samples not loaded/computed")
 
-        # First run: get data vector size
-        try:
+      nparams = len(self.samples)
+
+      if not self.loadchk:
+        self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
+        self.failed = np.asarray(self.failed).astype(bool)
+        
+        try: # First run: get data vector size
           dvs = self._compute_dvs_from_sample(self.samples[0])
         except Exception:
-          sys.stderr.write(f"Failed in _compute_dvs_from_sample for idx=0\n" 
-                           f"Cannot determine datavector length\n"
-                           f"aborting MPI job\n")
+          raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
+                             f"Cannot determine datavector length.")
+        self.datavectors = np.zeros((nparams, len(dvs)), dtype=np.float32)
+        self.datavectors[0] = dvs
+        self.failed[0] = False
+        idx = np.arange(1, nparams)
+      else:
+        idx = np.where(self.failed == True)[0] 
+
+      for i in idx:
+        try:
+          dvs = self._compute_dvs_from_sample(self.samples[i])
+          self.failed[i] = False
+        except Exception: # set datavector to zero and continue
+          self.failed[i] = True
+          self.datavectors[i,:] = 0.0
+          sys.stderr.write(f"[Rank 0] Worker 0 failed at i={i}\n")
+          sys.stderr.flush()
+          continue
+        self.datavectors[i] = dvs
+
+        if i % 2500 == 0:
+          print(f"Model number: {i+1} (total: {nparams}) - checkpoint", flush=True)
+          self.__save_chk()
+      self.__save_chk()
+    else:        
+      if rank == 0:
+        if not self.loadsamples:
+          sys.stderr.write(f"Model Samples not loaded/computed\n")
           sys.stderr.flush()
           comm.Abort(1)
-        self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
-        self.datavectors[0] = dvs
-        completed[0] = True
-        failed[0] = False
+        status = MPI.Status() 
+        block = 10000
+        next_block = 1 
+        too_frequent = True
+        nparams = len(self.samples)
+        if nparams <= nworkers:
+            sys.stderr.write(f"num params (={nparams}) <= "
+                             f"MPI workers (={nworkers})\n")
+            sys.stderr.flush()
+            comm.Abort(1)    
+        completed = np.zeros(nparams, dtype=np.uint8)
+        self.failed = np.asarray(self.failed).astype(bool)
 
-        for i in range(1, nparams):
-          if i <= nworkers: # seed one task per active worker
-            comm.send((i, self.samples[i]), dest = i, tag  = TASK_TAG)  
+        if not self.loadchk:
+          self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
+          self.failed = np.asarray(self.failed).astype(bool)
+
+          try: # First run: get data vector size
+            dvs = self._compute_dvs_from_sample(self.samples[0])
+          except Exception:
+            sys.stderr.write(f"Failed in _compute_dvs_from_sample for idx=0\n" 
+                             f"Cannot determine datavector length\n"
+                             f"aborting MPI job\n")
+            sys.stderr.flush()
+            comm.Abort(1)
+          self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
+          self.datavectors[0] = dvs
+          self.failed[0] = False
+          completed[0] = True
+          idx0 = np.arange(1, nparams)
+        else:
+          completed = ~self.failed
+          idx0 = np.where(self.failed == True)[0]
+        
+        tasks = deque(idx0.tolist())
+        nactive = min(nworkers, len(tasks))
+        for w in range(1, nactive+1):
+          j = tasks.popleft() 
+          comm.send((j, self.samples[j]), dest=w, tag=TASK_TAG)
+
+        count = 0
+        while tasks:
+          kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
+                                     tag = RESULT_TAG,
+                                     status = status)
+          if kind == "err": # set datavector to zero and continue
+            self.datavectors[idx,:] = 0.0
+            src = status.Get_source()
+            sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+            sys.stderr.flush() 
+            self.failed[idx] = True
           else:
-            # ANY_SOURCE: wait for whichever worker finishes next (dynamically scheduling)
-            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
-                                       tag = RESULT_TAG,
-                                       status = status)
-            if kind == "err": # set datavector to zero and continue
-              self.datavectors[idx,:] = 0.0
-              src = status.Get_source()
-              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
-              sys.stderr.flush() 
-              failed[idx] = True
-              completed[idx] = True
-            else:
-              self.datavectors[idx] = dvs 
-              completed[idx] = True
-              failed[idx] = False
-            comm.send((i, self.samples[i]), 
-                      dest = status.Get_source(), 
-                      tag  = TASK_TAG)
-          
-          if i%block == 0:
-            too_frequent = False
+            self.datavectors[idx] = dvs 
+            self.failed[idx] = False
+          completed[idx] = True
 
-          if not too_frequent:
-            start = (next_block - 1) * block
-            end   = min(nparams, next_block * block)
-            if completed[start:end].all():
-              print(f"Model number: {i+1} (total: {nparams}) (checkpoint)", flush=True)
-              np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-              np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
-              os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
-              os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")  
-              too_frequent = True
-              next_block += 1
+          if not self.loadchk:
+            if count%block == 0:
+              too_frequent = False
 
-        for _ in range(nworkers):  
+            if not too_frequent:
+              start = (next_block - 1) * block
+              end   = min(nparams, next_block * block)
+              if completed[start:end].all():
+                self.__save_chk()
+                too_frequent = True
+                next_block += 1
+          else:
+            if count%block == 0:
+              self.__save_chk()
+
+          j = tasks.popleft() 
+          count += 1
+          comm.send((j, self.samples[j]), 
+                    dest = status.Get_source(), 
+                    tag  = TASK_TAG)
+
+        for _ in range(nactive): # drain active workers
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                      tag = RESULT_TAG, 
                                      status = status) # drain results 
           if kind == "err":
-            failed[idx] = True
-            self.datavectors[idx,:] = 0.0
+            self.failed[idx] = True
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
             sys.stderr.flush()
           else:
             self.datavectors[idx] = dvs 
-          comm.send((0, None), 
-                    dest = status.Get_source(), 
-                    tag = STOP_TAG) # we are done tag = 0
+            self.failed[idx] = False
+          completed[idx] = True
+        for w in range(1, nworkers + 1): # stop workers
+          comm.send((0, None), dest=w, tag=STOP_TAG)
         comm.Barrier()  
-        
-        np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-        np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
-        os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
-        os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")     
-
+        self.__save_chk()
+      
       else:
       
         status = MPI.Status()
@@ -447,8 +541,7 @@ class dataset:
           except Exception:
             comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
             continue
-    
-    return True
+    return
 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -459,13 +552,6 @@ if __name__ == "__main__":
   comm = MPI.COMM_WORLD
   rank = comm.Get_rank()
   generator = dataset()
-  if (rank == 0):
-    generator.run_mcmc()
-    if not args.chain == 1:
-      generator.generate_datavectors()
-  else:
-    if not args.chain == 1:
-      generator.generate_datavectors()
   MPI.Finalize()
   exit(0)
 
