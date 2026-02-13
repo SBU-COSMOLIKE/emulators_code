@@ -318,14 +318,12 @@ class dataset:
       except Exception:
         raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
                            f"Cannot determine datavector length.")
-      self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
+      self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
       self.datavectors[0] = dvs
 
       failed = np.zeros(nparams, dtype=bool)
       
       for idx in range(1, nparams):
-        if idx % 20 == 0:
-          print(f"Model number: {idx+1} (total: {nparams})", flush=True)
         try:
           dvs = self._compute_dvs_from_sample(self.samples[idx])
         except Exception: # set datavector to zero and continue
@@ -336,7 +334,8 @@ class dataset:
           continue
         self.datavectors[idx] = dvs
 
-        if idx % 5000 == 0:
+        if idx % 2500 == 0:
+          print(f"Model number: {idx+1} (total: {nparams}) - checkpoint", flush=True)
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           np.savetxt(f"{self.failf}.tmp.txt", failed.astype(np.uint8), fmt="%d")
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
@@ -367,7 +366,7 @@ class dataset:
                            f"aborting MPI job\n")
           sys.stderr.flush()
           comm.Abort(1)
-        self.datavectors = np.empty((nparams, len(dvs)),dtype=np.float32)
+        self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
         self.datavectors[0] = dvs
         completed[0] = True
         failed[0] = False
