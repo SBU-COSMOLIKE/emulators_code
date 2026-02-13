@@ -382,6 +382,7 @@ class dataset:
     TASK_TAG = 1
     STOP_TAG = 0
     RESULT_TAG = 2
+    comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
     nworkers = size - 1
@@ -441,7 +442,6 @@ class dataset:
             sys.stderr.flush()
             comm.Abort(1)    
         completed = np.zeros(nparams, dtype=np.uint8)
-        self.failed = np.asarray(self.failed).astype(bool)
 
         if not self.loadchk:
           self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
