@@ -25,6 +25,7 @@ from collections import deque
 #    --chain 1 \
 #    --maxcorr 0.15 \
 #    --loadchk 1
+#    --freqchk 200
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -94,6 +95,10 @@ parser.add_argument("--loadchk",
                     help="Load from chk if exists",
                     type=int,
                     choices=[0,1])
+parser.add_argument("--freqchk",
+                    dest="freqchk",
+                    help="Load from chk if exists",
+                    type=int)
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -279,6 +284,7 @@ class dataset:
       if self.datavectors.shape[0] != self.samples.shape[0]:
         raise ValueError(f"Incompatible samples/datavectir chk files")
       self.loadsamples = True
+      print("Loaded models from chk")
     return self.loadchk
   
   def __save_chk(self):
@@ -421,7 +427,7 @@ class dataset:
           continue
         self.datavectors[i] = dvs
 
-        if i % 2500 == 0:
+        if i % args.freqchk == 0:
           print(f"Model number: {i+1} (total: {nparams}) - checkpoint", flush=True)
           self.__save_chk()
       self.__save_chk()
@@ -432,7 +438,7 @@ class dataset:
           sys.stderr.flush()
           comm.Abort(1)
         status = MPI.Status() 
-        block = 10000
+        block = args.freqchk
         next_block = 1 
         too_frequent = True
         nparams = len(self.samples)
