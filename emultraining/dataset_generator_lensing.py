@@ -175,28 +175,35 @@ class dataset:
     root = f"{root}/{args.root.rstrip('/')}"
     fileroot = f"{root}/{args.fileroot.rstrip('/')}"
     Path(f"{root}/chains").mkdir(parents=True, exist_ok=True)
-    self.failed = None        # track which models failed to compute dv
-    self.loadedfromchk = False      # load checkpoint if available
-    self.loadedsamples = False  # loaded samples sucessfully
     
     self.append = 0 if args.append is None else args.append
     self.bounds = None
     self.covmat = None 
     self.dvsf = None 
+    self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
+    if self.freqchk < 500:
+      raise ValueError("--freqchk must be >= 500") # avoid too much chk
     self.failed = None        # track which models failed to compute dv
     self.failf = None
     self.fiducial = None
     self.inv_covmat = None
     self.loadchk = 0 if args.loadchk is None else args.loadchk 
+    self.loadedfromchk = False  # check if loaded from checkpoint sucessfully
+    self.loadedsamples = False  # check loaded samples sucessfully
     self.maxcorr = 0.2 if args.maxcorr is None else args.maxcorr
+    if not (0 < self.maxcorr <= 1):
+      raise ValueError("--maxcorr must be between [0,1]")
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
+    if self.nparams < 0:
+      raise ValueError("--nparams must be positive integer")
     self.paramsf = None 
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
-    
+    if self.temp < 1:
+      raise ValueError("--temp must be > 1")
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -268,7 +275,7 @@ class dataset:
         break
       except np.linalg.LinAlgError:
         scale = np.mean(np.diag(C)) # scale jitt to matrix sz start tiny -> grow
-        jitt = (1e-12 if jitt==0 else jitt*10) * (scale if scale > 0 else 1.)
+        jitt = (1e-12 * scale if jitt == 0 else jitt*10)
     else:
       raise np.linalg.LinAlgError("could not stabilized cov to SPD w/ jitter")
     I = np.eye(C.shape[0])
@@ -335,8 +342,10 @@ class dataset:
           self.datavectors = np.load(f"{self.dvsf}.npy", 
                                      mmap_mode="r+", 
                                      allow_pickle=False)
+          self.dvs_is_memmap = True
         else:
           self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+          self.dvs_is_memmap = False
 
         if self.datavectors.ndim != 2:
           raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
@@ -351,11 +360,11 @@ class dataset:
     return rtnvar
   
   def __save_chk(self):
-    if getattr(self, "_dv_is_memmap", False):
-        self.datavectors.flush()  # checkpoint dv in-place
+    if self.dvs_is_memmap == True:
+      self.datavectors.flush()  # checkpoint dv in-place
     else:
-        np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
-        os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+      np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+      os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
     np.savetxt(f"{self.failf}.tmp.txt", self.failed.astype(np.uint8), fmt="%d")
     os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
 
@@ -389,20 +398,30 @@ class dataset:
                                        np.random.normal(size=(nwalkers, ndim)), 
                        nsteps=nsteps, 
                        progress=False)
-      tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                     copy=True, dtype=np.float32).max()
+
       xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
       nparams = np.atleast_2d(xf).shape[0]
       lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
       w    = np.ones((nparams, 1), dtype = np.float32)
       chi2 = -2*lnp
-          
+      
       if loadedfromchk == False:
-        print(f"Partial Result: tau = {tau}\n"
-              f"nwalkers={nwalkers}\n"
-              f"nsteps (per walker) = {nsteps}\n"
-              f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
-              f"nparams (after thin)={nparams}\n")
+        # Output some debug messaging ------------------------------------------
+        try:
+          tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
+                       copy=True, 
+                       dtype=np.float32).max()
+          print(f"Partial Result: tau = {tau}\n"
+                f"nwalkers={nwalkers}\n"
+                f"nsteps (per walker) = {nsteps}\n"
+                f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
+                f"nparams (after thin)={nparams}\n")
+        except Exception as e:
+          print(f"Partial Result: tau = N/A (emcee threw an exception)\n"
+                f"nwalkers={nwalkers}\n"
+                f"nsteps (per walker) = {nsteps}\n"
+                f"nparams (after thin)={nparams}\n")
+          tau = 1 # make sure main MPI worker does not crash over trivial check
         # save a range files ---------------------------------------------------
         hd = ["weights","lnp"] + names + ["chi2*"]
         rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
@@ -500,9 +519,10 @@ class dataset:
   def __generate_datavectors(self):
     if not self.setup:
       raise RuntimeError(f"Initial Setup not successful")
-    TASK_TAG = 1
-    STOP_TAG = 0
-    RESULT_TAG = 2
+    TTAG = 1      # Task tag
+    STAG = 0      # Stop tag
+    RTAG = 2      # Result tag
+    DTAG = 3      # Done (not crashed) tag
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -557,8 +577,8 @@ class dataset:
         next_block = 1 
         too_frequent = True
         nparams = len(self.samples)
-        if nparams <= nworkers:
-            sys.stderr.write(f"num params (={nparams}) <= "
+        if nparams < nworkers:
+            sys.stderr.write(f"num params (={nparams}) < "
                              f"MPI workers (={nworkers})\n")
             sys.stderr.flush()
             comm.Abort(1)    
@@ -589,12 +609,12 @@ class dataset:
         nactive = min(nworkers, len(tasks))
         for w in range(1, nactive+1):
           j = tasks.popleft() 
-          comm.send((j, self.samples[j]), dest=w, tag=TASK_TAG)
+          comm.send((j, self.samples[j]), dest=w, tag=TTAG)
 
         count = 0
         while tasks:
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
-                                     tag = RESULT_TAG,
+                                     tag = RTAG,
                                      status = status)
           if kind == "err": # set datavector to zero and continue
             self.datavectors[idx,:] = 0.0
@@ -626,13 +646,14 @@ class dataset:
           count += 1
           comm.send((j, self.samples[j]), 
                     dest = status.Get_source(), 
-                    tag  = TASK_TAG)
+                    tag  = TTAG)
 
         for _ in range(nactive): # drain active workers
           kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
-                                     tag = RESULT_TAG, 
+                                     tag = RTAG, 
                                      status = status) # drain results 
           if kind == "err":
+            self.datavectors[idx,:] = 0.0
             self.failed[idx] = True
             src = status.Get_source()
             sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
@@ -641,10 +662,26 @@ class dataset:
             self.datavectors[idx] = dvs 
             self.failed[idx] = False
           completed[idx] = True
+        
+        self.__save_chk() # save before sending stop sign
+        
         for w in range(1, nworkers + 1): # stop workers
-          comm.send((0, None), dest=w, tag=STOP_TAG)
-        comm.Barrier()  
-        self.__save_chk()
+          comm.send((0, None), dest=w, tag=STAG)      
+      
+        # Check if worker have crash (example: CAMB crash)
+        deadline = MPI.Wtime() + 1000.0
+        wkdone = set()
+        while len(wkdone) < nworkers:
+          if comm.Iprobe(source=MPI.ANY_SOURCE, tag=DTAG, status=status):
+            _ = comm.recv(source=MPI.ANY_SOURCE, tag=DTAG, status=status)
+            wkdone.add(status.Get_source())
+          else:
+            if MPI.Wtime() > deadline:
+              sys.stderr.write(f"[Rank 0] STOP worker timeout. Missing: " 
+                               f"{[x for x in range(1,nworkers+1) if x not in wkdone]}\n")
+              sys.stderr.flush()
+              comm.Abort(1)
+            time.sleep(0.01)
       
       else:
       
@@ -652,15 +689,17 @@ class dataset:
         while (True):
           idx, sample = comm.recv(source = 0, 
                                   tag = MPI.ANY_TAG, 
-                                  status = status)
-          if (status.Get_tag() == STOP_TAG):
-            comm.Barrier() # if work is done (tag = 0), wait for other workers
+                                  status = status) # try block on main b/c if
+                                                   # rank zero throws an exception
+                                                   # before send, MPI hangs
+          if (status.Get_tag() == STAG):
+            comm.send(("worker done", rank), dest = 0, tag = DTAG)
             break
           try:
             dvs = self._compute_dvs_from_sample(sample)
-            comm.send(("ok", idx, dvs), dest = 0, tag = RESULT_TAG)
+            comm.send(("ok", idx, dvs), dest = 0, tag = RTAG)
           except Exception:
-            comm.send(("err", idx, None), dest = 0, tag = RESULT_TAG)
+            comm.send(("err", idx, None), dest = 0, tag = RTAG)
             continue
     return
 
@@ -672,7 +711,11 @@ class dataset:
 if __name__ == "__main__":
   comm = MPI.COMM_WORLD
   rank = comm.Get_rank()
-  generator = dataset()
+  try:
+    generator = dataset()
+  except Exception:
+    traceback.print_exc()
+    comm.Abort(1)   # other ranks don’t hang in recv/barrier
   MPI.Finalize()
   exit(0)
 
