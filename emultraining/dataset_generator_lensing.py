@@ -348,7 +348,12 @@ class dataset:
   # run mcmc
   #-----------------------------------------------------------------------------
   def __run_mcmc(self):
-    loadedfromchk = self.__load_chk()
+    try:
+      loadedfromchk = self.__load_chk()
+    except Exception:
+      sys.stderr.write(f"[load_chk] failed: {e}\n")
+      traceback.print_exc(file=sys.stderr)
+      loadedfromchk = False
     
     if (loadedfromchk == False) or (loadedfromchk == True and self.append == 1):
       ndim     = len(self.sampled_params)
