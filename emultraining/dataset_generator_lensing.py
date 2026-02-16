@@ -1,5 +1,5 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time, traceback
+import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
@@ -325,7 +325,19 @@ class dataset:
           print(self.samples.shape[0], self.failed.shape[0])
           raise ValueError(f"Incompatible samples/failed chk files")
 
-        self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+        # need to be a bit careful with RAM here
+        arr = np.load(f"{self.dvsf}.npy", mmap_mode="r", allow_pickle=False)
+        ramneed = arr.nbytes
+        ramavail = psutil.virtual_memory().available
+        if ramneed > 0.8 * ramavail:
+          print(f"Warning (RAM): datavectors need {ramneed/1e9:.2f} GB of RAM, "
+                f"but only {ramavail/1e9:.2f} GB of RAM is available")
+          self.datavectors = np.load(f"{self.dvsf}.npy", 
+                                     mmap_mode="r+", 
+                                     allow_pickle=False)
+        else:
+          self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+
         if self.datavectors.ndim != 2:
           raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
@@ -339,9 +351,12 @@ class dataset:
     return rtnvar
   
   def __save_chk(self):
-    np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+    if getattr(self, "_dv_is_memmap", False):
+        self.datavectors.flush()  # checkpoint dv in-place
+    else:
+        np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+        os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
     np.savetxt(f"{self.failf}.tmp.txt", self.failed.astype(np.uint8), fmt="%d")
-    os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
     os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
 
   #-----------------------------------------------------------------------------
@@ -350,7 +365,7 @@ class dataset:
   def __run_mcmc(self):
     try:
       loadedfromchk = self.__load_chk()
-    except Exception:
+    except Exception as e:
       sys.stderr.write(f"[load_chk] failed: {e}\n")
       traceback.print_exc(file=sys.stderr)
       loadedfromchk = False
