@@ -556,6 +556,8 @@ class dataset:
     STAG = 0      # Stop tag
     RTAG = 2      # Result tag
     DTAG = 3      # Done (not crashed) tag
+    TASK_TIMEOUT = 1800
+    STOP_TIMEOUT = 300.0 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -653,6 +655,7 @@ class dataset:
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RTAG,
                                        status = status)
+            count += 1
             src = status.Get_source()
             if src in active:
               del active[src]
@@ -683,15 +686,14 @@ class dataset:
                 self.__save_chk()
 
             j = tasks.popleft() 
-            count += 1
             comm.send((j, self.samples[j]), 
-                      dest = status.Get_source(), 
+                      dest = src, 
                       tag  = TTAG)
             active[src] = (j, MPI.Wtime())
           else:
             doabort = False
             for w, (idxl, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > 300: # no worker should run > 5min w/o comm
+              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TASK_TIMEOUT
                 sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
                 sys.stderr.flush()
                 doabort = True
@@ -699,6 +701,7 @@ class dataset:
               for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
                 self.datavectors[idxl,:] = 0.0
                 self.failed[idxl] = True
+                completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1) 
             time.sleep(.1) # avoid 100% CPU usage
@@ -710,24 +713,22 @@ class dataset:
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                        tag = RTAG, 
                                        status = status) # drain results 
+            src = status.Get_source()
             if kind == "err":
               self.datavectors[idx,:] = 0.0
               self.failed[idx] = True
-              src = status.Get_source()
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
               sys.stderr.flush()
             else:
               self.datavectors[idx] = dvs 
               self.failed[idx] = False
             completed[idx] = True
-            # Remove worker from active list
-            src = status.Get_source()
-            if src in active:
+            if src in active: # Remove worker from active list
               del active[src]
           else:
             doabort = False
             for w, (idxl, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > 1800: # no worker should run > 30min w/o comm
+              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TASK_TIMEOUT
                 sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
                 sys.stderr.flush()
                 doabort = True
@@ -735,6 +736,7 @@ class dataset:
               for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
                 self.datavectors[idxl,:] = 0.0
                 self.failed[idxl] = True
+                completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1)
             time.sleep(.1) # avoid 100% CPU usage    
@@ -754,7 +756,7 @@ class dataset:
               del active[src]
           else:
             for w, (_, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > 1800: # no worker should run > 30min w/o comm
+              if (MPI.Wtime()-t0) > STOP_TIMEOUT: # no task runtime > STOP_TIMEOUT
                 sys.stderr.write(f"[Rank 0] Worker {w} timed out (MPI DTAG)")
                 sys.stderr.flush()
                 comm.Abort(1)
