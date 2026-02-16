@@ -410,14 +410,12 @@ class dataset:
       else:
         # append chain file begins ---------------------------------------------
         fname = f"{self.paramsf}.1.txt";
-        hd=f"# nwalkers={nwalkers}\n" + ' '.join(["weights", "lnp"] + names)
         with open(fname, "a") as f: # append mode
-          if (not os.path.exists(fname)) or (os.path.getsize(fname) == 0):
-            print("Test ", os.path.exists(fname), os.path.getsize(fname))
-            f.write("# " + hd + "\n")
+          hd = f"nwalkers={nwalkers}\n" + ' '.join(["weights","lnp"]+names)
           np.savetxt(f, 
                      np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1), 
-                     fmt="%.9e")
+                     header = hd if (os.path.getsize(fname) == 0) else "",
+                     fmt = "%.9e")
         
         self.samples = np.atleast_2d(np.loadtxt(fname, dtype=np.float32))[:,2:-1]
         if self.samples.ndim != 2:
