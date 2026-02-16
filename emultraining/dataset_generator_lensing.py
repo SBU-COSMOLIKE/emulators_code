@@ -335,11 +335,13 @@ class dataset:
 
         # need to be a bit careful with RAM here
         arr = np.load(f"{self.dvsf}.npy", mmap_mode="r", allow_pickle=False)
-        RAMneed = arr.nbytes
+        RAMneed = arr.nbytes + self.samples.nbytes + self.failed.nbytes
         RAMavail = psutil.virtual_memory().available
-        if RAMneed > 0.8 * RAMavail:
-          print(f"Warning (RAM): datavectors need {RAMneed/1e9:.2f} GB of RAM, "
-                f"but only {RAMavail/1e9:.2f} GB of RAM is available")
+        if RAMneed > 0.75 * RAMavail:
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM"
+                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+                f"We will read dvs from HD (slow)")
+          self.dvs_is_memmap = True
           self.datavectors = np.load(f"{self.dvsf}.npy", 
                                      mmap_mode="r+", 
                                      allow_pickle=False)
