@@ -7,6 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 from getdist import loadMCSamples
 from collections import deque
+from numpy.lib.format import open_memmap
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Example how to run this program
@@ -192,8 +193,8 @@ class dataset:
     self.loadedfromchk = False  # check if loaded from checkpoint sucessfully
     self.loadedsamples = False  # check loaded samples sucessfully
     self.maxcorr = 0.2 if args.maxcorr is None else args.maxcorr
-    if not (0 < self.maxcorr <= 1):
-      raise ValueError("--maxcorr must be between [0,1]")
+    if not (0.01 < self.maxcorr <= 1):
+      raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
     if self.nparams < 0:
@@ -474,12 +475,38 @@ class dataset:
         if self.samples.shape[0] != self.failed.shape[0]:
           raise ValueError(f"Incompatible samples/failed chk files")
 
-        # increase number of rows of self.datavectors --------------------------
-        nrows = nparams
+        # increase number of rows of self.datavectors (and save .npy)
+        nrows = self.datavectors.shape[0]
         ncols = self.datavectors.shape[1]
-        zerosdvs = np.zeros((nrows, ncols), dtype=np.float32)
-        self.datavectors = np.vstack((self.datavectors, zerosdvs))
+        zerosdvs = np.zeros((nparams, ncols), dtype=np.float32)
         
+        # careful w/ RAM
+        RAMneed = ( self.datavectors.nbytes + 
+                    (nrows + nparams)*ncols*self.datavectors.dtype.itemsize)
+        RAMavail = psutil.virtual_memory().available
+        if RAMneed < 0.8 * RAMavail:
+          self.datavectors = np.vstack((self.datavectors, zerosdvs))
+          np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
+          os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+        else:
+          datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
+                                    mmap_mode="w+", 
+                                    shape=(nrows + nparams, ncols),
+                                    dtype=self.datavectors.dtype)
+          for s in range(0, nrows, 2500): # chunks = avoid RAM spikes) 
+            e = min(nrows, s + 2500)
+            datavectors[s:e] = self.datavectors[s:e]
+          for s in range(nrows, nrows + nparams, 2500):
+            e = min(nrows + nparams, s + 2500)
+            datavectors[s:e] = 0
+          datavectors.flush()
+          del datavectors
+          os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+          self.datavectors = np.load(f"{self.dvsf}.npy", 
+                                     mmap_mode="r+", 
+                                     allow_pickle=False)
+          self.dvs_is_memmap = True
+
         if self.datavectors.shape[0] != self.samples.shape[0]:
           raise ValueError(f"Incompatible samples/datavectir chk files")
         # set  self.loadedfromchk ----------------------------------------------
