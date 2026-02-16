@@ -650,7 +650,9 @@ class dataset:
 
         count  = 0
         while tasks:
-          # I need to protect the script against crashes (like CAMB/Class crash)
+          # comm.Iprobe = non-blocking operation used to check for an incoming 
+          #               message without actually receiving it
+          # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RTAG,
@@ -709,6 +711,9 @@ class dataset:
 
         # drain active workers ------------------------------------------------
         while active: 
+          # comm.Iprobe = non-blocking operation used to check for an incoming 
+          #               message without actually receiving it
+          # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
             kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
                                        tag = RTAG, 
@@ -749,6 +754,9 @@ class dataset:
           comm.send((0, None), dest=w, tag=STAG)
           active[w] = (0, MPI.Wtime())     
         while active:
+          # comm.Iprobe = non-blocking operation used to check for an incoming 
+          #               message without actually receiving it
+          # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source=MPI.ANY_SOURCE, tag=DTAG, status=status):
             _ = comm.recv(source=MPI.ANY_SOURCE, tag=DTAG, status=status)
             src = status.Get_source()
