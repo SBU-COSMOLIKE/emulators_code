@@ -337,7 +337,10 @@ class dataset:
         arr = np.load(f"{self.dvsf}.npy", mmap_mode="r", allow_pickle=False)
         RAMneed = arr.nbytes + self.samples.nbytes + self.failed.nbytes
         RAMavail = psutil.virtual_memory().available
-        if RAMneed > 0.75 * RAMavail:
+        if RAMneed < 0.75 * RAMavail:
+          self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+          self.dvs_is_memmap = False
+        else:
           print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
                 f"We will read dvs from HD (slow)")
@@ -346,10 +349,7 @@ class dataset:
                                      mmap_mode="r+", 
                                      allow_pickle=False)
           self.dvs_is_memmap = True
-        else:
-          self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
-          self.dvs_is_memmap = False
-
+          
         if self.datavectors.ndim != 2:
           raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
@@ -491,6 +491,7 @@ class dataset:
           self.datavectors = np.vstack((self.datavectors, zerosdvs))
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
+          self.dvs_is_memmap = False
         else:
           print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
@@ -578,7 +579,25 @@ class dataset:
         except Exception:
           raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
                              f"Cannot determine datavector length.")
-        self.datavectors = np.zeros((nparams, len(dvs)), dtype=np.float32)
+        nrows = nparams
+        ncols = len(dvs)
+        # need to be a bit careful with RAM usage here 
+        RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
+                    nrows*ncols*dvs.dtype.itemsize)
+        RAMavail = psutil.virtual_memory().available
+        if RAMneed < 0.75 * RAMavail:
+          self.datavectors = np.zeros((nrows, ncols), dtype=np.float32)
+          self.dvs_is_memmap = False
+        else:
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
+                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+                f"We will read dvs from HD (slow)")
+          self.datavectors = open_memmap(f"{self.dvsf}.npy", 
+                                         mmap_mode="w+", 
+                                         shape=(nrows, ncols),
+                                         dtype=dvs.dtype.itemsize)
+          self.dvs_is_memmap = True
+
         self.datavectors[0] = dvs
         self.failed[0] = False
         idx = np.arange(1, nparams)
@@ -631,7 +650,26 @@ class dataset:
                              f"aborting MPI job\n")
             sys.stderr.flush()
             comm.Abort(1)
-          self.datavectors = np.zeros((nparams, len(dvs)),dtype=np.float32)
+          # TODO: CHECK FOR RAM USAGE
+          nrows = nparams
+          ncols = len(dvs)
+          # need to be a bit careful with RAM usage here 
+          RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
+                      nrows*ncols*dv.dtype.itemsize)
+          RAMavail = psutil.virtual_memory().available
+          if RAMneed < 0.75 * RAMavail:
+            self.datavectors = np.zeros((nrows, ncols), dtype=np.float32)
+            self.dvs_is_memmap = False
+          else:
+            print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
+                  f"There is {RAMavail/1e9:.2f} GB of RAM available."
+                  f"We will read dvs from HD (slow)")
+            self.datavectors = open_memmap(f"{self.dvsf}.npy", 
+                                           mmap_mode="w+", 
+                                           shape=(nrows, ncols),
+                                           dtype=dv.dtype.itemsize)
+            self.dvs_is_memmap = True
+
           self.datavectors[0] = dvs
           self.failed[0] = False
           completed[0] = True
