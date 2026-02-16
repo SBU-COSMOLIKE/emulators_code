@@ -338,7 +338,7 @@ class dataset:
         RAMneed = arr.nbytes + self.samples.nbytes + self.failed.nbytes
         RAMavail = psutil.virtual_memory().available
         if RAMneed > 0.75 * RAMavail:
-          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM"
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
                 f"We will read dvs from HD (slow)")
           self.dvs_is_memmap = True
@@ -492,8 +492,9 @@ class dataset:
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
         else:
-          print(f"Warning (RAM): datavectors need {RAMneed/1e9:.2f} GB of RAM, "
-                f"but only {RAMavail/1e9:.2f} GB of RAM is available")
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
+                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+                f"We will read dvs from HD (slow)")
           datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
                                     mmap_mode="w+", 
                                     shape=(nrows + nparams, ncols),
