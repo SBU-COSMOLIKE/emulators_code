@@ -1,84 +1,90 @@
-import torch
+import torch, os, sys, yaml
 import numpy as np
-import os
-import sys
 from datetime import datetime
 from emulator import ResTRF, ResCNN
-import yaml
 import h5py as h5
-import yaml
-import numpy as np
-import os
 import argparse
-
-#===================================================================================================
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+# Example how to run this program
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#mpirun -n 2 --oversubscribe \
+#  python external_modules/code/emulators/emultrf/emultraining/train_emulator.py \
+#    --root projects/roman_real/  \
+#    --fileroot emulators/nla_cosmic_shear/ \
+#    --nparams 1000 \
+#    --temp 128 \
+#    --yaml 'w0wa_takahashi_cs_CNN.yaml' \
+#    --datavsfile 'w0wa_takahashi_dvs_train' \
+#    --paramfile 'w0wa_takahashi_params_train' \
+#    --failfile  'w0wa_params_failed_train' \
+#    --chain 1 \
+#    --maxcorr 0.15 \
+#    --loadchk 1
+#    --freqchk 2000
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 # Command line args
-
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(prog='train_emulator')
-
-parser.add_argument("--yaml", "-y",
-    dest="cobaya_yaml",
-    help="The training YAML containing the training_args block",
-    type=str,
-    nargs='?')
-
-parser.add_argument("--probe", "-p",
-    dest="probe",
-    help="the probe, listed in the yaml, of which to generate data vectors for.",
-    type=str,
-    nargs='?')
-
-parser.add_argument("--epochs", "-e",
-    dest="n_epochs",
-    help="(int) number of training epochs. Default=250",
-    type=int,
-    default=250,
-    nargs='?')
-
-parser.add_argument("--batchsize", "-b",
-    dest="batch_size",
-    help="(int) batch size to use while training. Default=256",
-    type=int,
-    default=256,
-    nargs='?')
-
-parser.add_argument("--learning_rate", "-lr",
-    dest="learning_rate",
-    help="(float) learning rate to use while training. Default=1e-3",
-    type=float,
-    default=1e-3,
-    nargs='?')
-
-parser.add_argument("--weight_decay", "-wd",
-    dest="weight_decay",
-    help="(float) Weight decay (adds L2 norm of model weights to loss fcn) to use while training. Default=0",
-    type=float,
-    default=0.0,
-    nargs='?')
-
-parser.add_argument("--save_losses", "-s",
-    dest="save_losses",
-    help="(bool) Save losses at each epoch to a text file 'losses.txt'. Default=False",
-    type=bool,
-    default=False,
-    nargs='?')
-
-parser.add_argument("--mask", "-m",
-    dest="training_masked",
-    help="Mask the training data using the mask define in the dataset file. Default=False",
-    type=bool,
-    default=False,
-    nargs='?')
+parser.add_argument("--yaml",
+                    dest="yaml",
+                    help="The training YAML containing the training_args block",
+                    type=str,
+                    required=True)
+parser.add_argument("--root",
+                    dest="root",
+                    help="Project folder",
+                    type=str,
+                    required=True)
+parser.add_argument("--fileroot",
+                    dest="fileroot",
+                    help="Subfolder of Project folder where we find yaml and fisher",
+                    type=str,
+                    required=True)
+parser.add_argument("--epochs", 
+                    dest="nepochs",
+                    help="(int) number of training epochs",
+                    type=int,
+                    required=True)
+parser.add_argument("--batchsize"
+                    dest="bs",
+                    help="batch size to use while training",
+                    type=int,
+                    required=True)
+parser.add_argument("--learningrate", 
+                    dest="lr",
+                    help="learning rate to use while training. Default=1e-3",
+                    type=float,
+                    required=True)
+parser.add_argument("--weight_decay",
+                    dest="wd",
+                    help="weight decay to use while training",
+                    type=float,
+                    default=0.0,
+                    nargs='?')
+parser.add_argument("--save_losses",
+                    dest="sl",
+                    help="save losses at each epoch. Default=False",
+                    type=bool,
+                    required=True)
+parser.add_argument("--mask"
+                    dest="mask",
+                    help="mask the training data (mask define in dataset file)",
+                    type=bool,
+                    required=True)
 
 args, unknown     = parser.parse_known_args()
-cobaya_yaml       = args.cobaya_yaml
+cobaya_yaml       = args.yaml
 probe             = args.probe
-n_epochs          = args.n_epochs
-batch_size        = args.batch_size
-learning_rate     = args.learning_rate
-weight_decay      = args.weight_decay
-save_losses       = args.save_losses
-training_masked   = args.training_masked
+nepochs           = args.nepochs
+batch_size        = args.bs
+learning_rate     = args.lr
+weight_decay      = args.wd
+save_losses       = args.sl
+training_masked   = args.mask
 
 #===================================================================================================
 # covariance matrix read from file specified in the .dataset file specified in YAML
@@ -222,7 +228,7 @@ def progress_bar(train_loss, valid_loss, start_time, epoch, total_epochs, optim)
 # training routine
 
 def train_emulator(train_yaml, probe,
-            n_epochs=250, batch_size=32, learning_rate=1e-3, weight_decay=0, 
+            nepochs=250, batch_size=32, learning_rate=1e-3, weight_decay=0, 
             save_losses=False):
     '''
     routine to train an emulator. 
@@ -444,7 +450,7 @@ def train_emulator(train_yaml, probe,
     tmp_dvfid = dv_fid.to(device)
     tmp_invcovmat = torch.linalg.inv(covmat).to(device)
 
-    for e in range(n_epochs):
+    for e in range(nepochs):
         model.train()
 
         # training loss
@@ -504,7 +510,7 @@ def train_emulator(train_yaml, probe,
             optim.zero_grad()
 
 
-        progress_bar(losses_train[-1],losses_valid[-1],train_start_time, e, n_epochs, optim)
+        progress_bar(losses_train[-1],losses_valid[-1],train_start_time, e, nepochs, optim)
     
     if ( save_losses ):
         np.savetxt("losses.txt", np.array([losses_train,losses_valid],dtype=np.float32))
@@ -606,5 +612,5 @@ def train_emulator(train_yaml, probe,
 
 if __name__ == "__main__":
     train_emulator(cobaya_yaml, probe, 
-        n_epochs, batch_size, learning_rate, weight_decay, 
+        nepochs, batch_size, learning_rate, weight_decay, 
         save_losses)

@@ -24,8 +24,9 @@ from collections import deque
 #    --failfile  'w0wa_params_failed_train' \
 #    --chain 1 \
 #    --maxcorr 0.15 \
-#    --loadchk 1
-#    --freqchk 200
+#    --freqchk 2000 \
+#    --loadchk 1 \
+#    --append 0 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -99,6 +100,11 @@ parser.add_argument("--freqchk",
                     dest="freqchk",
                     help="Load from chk if exists",
                     type=int)
+parser.add_argument("--append",
+                    dest="append",
+                    help="Append more models (only trye of loadchk == true)",
+                    type=int,
+                    choices=[0,1])
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -110,34 +116,15 @@ class dataset:
   # init
   #-----------------------------------------------------------------------------  
   def __init__(self):
-    self.failed = None        # track which models failed to compute dv
-    self.loadchk = False      # load checkpoint if available
-    self.loadsamples = False  # loaded samples sucessfully
-    self.model = None
-    self.sampled_params = None 
-    self.fiducial = None
-    self.bounds = None
-    self.covmat = None 
-    self.inv_covmat = None 
-    self.dvsf = None 
-    self.paramsf = None 
-    self.failf = None
     self.setup = False
-    
     self.__setup_flags()
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     if rank == 0:
-      if args.loadchk:
-        self.__load_chk()
-      if not self.loadchk:
-        self.__run_mcmc()
-      if not args.chain == 1:
-        self.__generate_datavectors()
-    else:
-      if not args.chain == 1:
-        self.__generate_datavectors()
+      self.__run_mcmc()
+    if not args.chain == 1:
+      self.__generate_datavectors()
 
   def __setup_flags(self):
     #---------------------------------------------------------------------------
@@ -151,8 +138,27 @@ class dataset:
     fileroot = f"{root}/{args.fileroot.rstrip('/')}"
     Path(f"{root}/chains").mkdir(parents=True, exist_ok=True)
     self.failed = None        # track which models failed to compute dv
-    self.loadchk = False      # load checkpoint if available
-    self.loadsamples = False  # loaded samples sucessfully
+    self.loadedfromchk = False      # load checkpoint if available
+    self.loadedsamples = False  # loaded samples sucessfully
+    
+    self.append = 0 if args.append is None else args.append
+    self.bounds = None
+    self.covmat = None 
+    self.dvsf = None 
+    self.freqchk = 5000 if args.freqchk is None else args.freqchk
+    self.failed = None        # track which models failed to compute dv
+    self.failf = None
+    self.fiducial = None
+    self.inv_covmat = None
+    self.loadchk = 0 if args.loadchk is None else args.loadchk 
+    self.maxcorr = 0.2 if args.maxcorr is None else args.maxcorr
+    self.model = None
+    self.nparams = 10000 if args.nparams is None else args.nparams
+    self.paramsf = None 
+    self.sampled_params = None 
+    self.samples = None
+    self.temp = 128 if args.temp is None else args.temp
+    
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -209,7 +215,7 @@ class dataset:
     outer = np.outer(sig, sig)
     corr  = covmat / outer 
     m = np.abs(corr - np.eye(n)).max()
-    corr /= max(1.0, m / args.maxcorr) if m > 0 else 1.0
+    corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
     np.fill_diagonal(corr, 1.0)
     covmat = corr * outer
 
@@ -235,11 +241,11 @@ class dataset:
     # Define output files
     #---------------------------------------------------------------------------
     datavsfile = Path(args.datavsfile).stem
-    self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{args.temp}"
+    self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{self.temp}"
     paramfile = Path(args.paramfile).stem
-    self.paramsf = f"{root}/chains/{paramfile}_{probe}_{args.temp}"
+    self.paramsf = f"{root}/chains/{paramfile}_{probe}_{self.temp}"
     failfile = Path(args.failfile).stem
-    self.failf = f"{root}/chains/{failfile}_{probe}_{args.temp}"
+    self.failf = f"{root}/chains/{failfile}_{probe}_{self.temp}"
     
     #---------------------------------------------------------------------------
     # Setup Done
@@ -252,40 +258,47 @@ class dataset:
   def __param_logpost(self,x):
     y = x - self.fiducial
     logprior = self.model.prior.logp(x)
-    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/args.temp
+    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
 
   #-----------------------------------------------------------------------------
   # save/load checkpoint
   #-----------------------------------------------------------------------------
   def __load_chk(self):
-    self.loadchk = all([os.path.isfile(x) for x in [f"{self.dvsf}.npy", 
-                                                    f"{self.failf}.txt",
-                                                    f"{self.paramsf}.covmat", 
-                                                    f"{self.paramsf}.ranges",
-                                                    f"{self.paramsf}.1.txt"]])
-    if self.loadchk:
-      # row 0/1 rows are weights, lnp. Last row is chi2
-      self.samples = np.atleast_2d(np.loadtxt(f"{self.paramsf}.1.txt", 
-                                              dtype=np.float32))[:,2:-1]
-      if self.samples.ndim != 2:
-        raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
-      
-      self.failed = np.loadtxt(f"{self.failf}.txt", dtype=np.uint8)
-      self.failed = np.asarray(self.failed).astype(bool)
-      if self.failed.ndim != 1:
-        raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
-      
-      if self.samples.shape[0] != self.failed.shape[0]:
-        raise ValueError(f"Incompatible samples/failed chk files")
+    rtnvar = False
+    if self.loadchk == 1:
+      loadchk = all([os.path.isfile(x) for x in [f"{self.dvsf}.npy", 
+                                                 f"{self.failf}.txt",
+                                                 f"{self.paramsf}.covmat", 
+                                                 f"{self.paramsf}.ranges",
+                                                 f"{self.paramsf}.1.txt"]])
+      if loadchk:
+        # row 0/1 rows are weights, lnp. Last row is chi2
+        self.samples = np.atleast_2d(np.loadtxt(f"{self.paramsf}.1.txt", 
+                                                dtype=np.float32))[:,2:-1]
+        if self.samples.ndim != 2:
+          raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
+        
+        self.failed = np.loadtxt(f"{self.failf}.txt", dtype=np.uint8)
+        self.failed = np.asarray(self.failed).astype(bool)
+        if self.failed.ndim != 1:
+          raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
+        
+        if self.samples.shape[0] != self.failed.shape[0]:
+          print(self.samples.shape[0], self.failed.shape[0])
+          raise ValueError(f"Incompatible samples/failed chk files")
 
-      self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
-      if self.datavectors.ndim != 2:
-        raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
-      if self.datavectors.shape[0] != self.samples.shape[0]:
-        raise ValueError(f"Incompatible samples/datavectir chk files")
-      self.loadsamples = True
-      print("Loaded models from chk")
-    return self.loadchk
+        self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
+        if self.datavectors.ndim != 2:
+          raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
+        if self.datavectors.shape[0] != self.samples.shape[0]:
+          raise ValueError(f"Incompatible samples/datavectir chk files")
+        if loadchk: 
+          print("Loaded models from chk")
+          if self.append == 0:
+            self.loadedsamples = True
+            self.loadedfromchk = True
+        rtnvar = True
+    return rtnvar
   
   def __save_chk(self):
     np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
@@ -297,69 +310,115 @@ class dataset:
   # run mcmc
   #-----------------------------------------------------------------------------
   def __run_mcmc(self):
-    ndim     = len(self.sampled_params)
-    names    = list(self.sampled_params)
-    bds      = self.bounds
-    nwalkers = int(3*ndim)
-    nsteps   = int(max(7500, args.nparams/nwalkers)) # (for safety we assume tau>100)
-    burnin   = int(0.3*nsteps)                       # 30% burn-in
-    thin     = max(1,int(float((nsteps-burnin)*nwalkers)/args.nparams)-1)
+    loadedfromchk = self.__load_chk()
     
-    sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
-                                    ndim = ndim, 
-                                    moves=[(emcee.moves.DEMove(), 0.8),
-                                           (emcee.moves.DESnookerMove(), 0.2)],
-                                    log_prob_fn = self.__param_logpost)
-    sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
-                                     0.5*np.sqrt(np.diag(self.covmat))*
-                                     np.random.normal(size=(nwalkers, ndim)), 
-                     nsteps=nsteps, 
-                     progress=False)
-    tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                   copy=True, dtype=np.float32).max()
-    print(f"Partial Result: tau = {tau}\n"
-          f"nwalkers={nwalkers}\n"
-          f"nsteps (per walker) = {nsteps}\n"
-          f"nsteps/tau = {nsteps/tau} (min should be ~50)\n")
-    xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
-    lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
-    w    = np.ones((len(xf), 1), dtype = np.float32)
-    chi2 = -2*lnp
+    if (loadedfromchk == False) or (loadedfromchk == True and self.append == 1):
+      ndim     = len(self.sampled_params)
+      names    = list(self.sampled_params)
+      bds      = self.bounds
+      nwalkers = int(3*ndim)
+      nsteps   = int(max(7500, self.nparams/nwalkers)) # (for safety we assume tau>100)
+      burnin   = int(0.3*nsteps)                       # 30% burn-in
+      thin     = max(1,int(float((nsteps-burnin)*nwalkers)/self.nparams)-1)
+      
+      sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
+                                      ndim = ndim, 
+                                      moves=[(emcee.moves.DEMove(), 0.8),
+                                             (emcee.moves.DESnookerMove(), 0.2)],
+                                      log_prob_fn = self.__param_logpost)
+      sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
+                                       0.5*np.sqrt(np.diag(self.covmat))*
+                                       np.random.normal(size=(nwalkers, ndim)), 
+                       nsteps=nsteps, 
+                       progress=False)
+      tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
+                     copy=True, dtype=np.float32).max()
+      xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
+      nparams = np.atleast_2d(xf).shape[0]
+      lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
+      w    = np.ones((nparams, 1), dtype = np.float32)
+      chi2 = -2*lnp
+          
+      if loadedfromchk == False:
+        print(f"Partial Result: tau = {tau}\n"
+              f"nwalkers={nwalkers}\n"
+              f"nsteps (per walker) = {nsteps}\n"
+              f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
+              f"nparams (after thin)={nparams}\n")
+        # save a range files ---------------------------------------------------
+        hd = ["weights","lnp"] + names + ["chi2*"]
+        rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
+        with open(f"{self.paramsf}.ranges", "w") as f: 
+          f.write(f"# {' '.join(hd)}\n")
+          f.writelines(f"{n} {l:.5e} {h:.5e}\n" for n, l, h in rows)
+        # save paramname files -------------------------------------------------
+        param_info = self.model.info()['params']
+        latex  = [param_info[x]['latex'] for x in names]
+        names.append("chi2*")
+        latex.append("\\chi^2")
+        np.savetxt(f"{self.paramsf}.paramnames", 
+                   np.column_stack((names,latex)),
+                   fmt="%s")
+        # save chain begins ----------------------------------------------------
+        fname = f"{self.paramsf}.1.txt";
+        hd=f"nwalkers={nwalkers}\n"
+        np.savetxt(fname,
+                   np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
+                   fmt="%.9e",
+                   header=hd + ' '.join(["weights", "lnp"] + names),
+                   comments="# ")
+        # copy samples to self.samples  ----------------------------------------
+        self.samples = np.array(xf, copy=True, dtype=np.float32)
+      else:
+        # append chain file begins ---------------------------------------------
+        fname = f"{self.paramsf}.1.txt";
+        hd=f"# nwalkers={nwalkers}\n" + ' '.join(["weights", "lnp"] + names)
+        with open(fname, "a") as f: # append mode
+          if (not os.path.exists(fname)) or (os.path.getsize(fname) == 0):
+            print("Test ", os.path.exists(fname), os.path.getsize(fname))
+            f.write("# " + hd + "\n")
+          np.savetxt(f, 
+                     np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1), 
+                     fmt="%.9e")
+        
+        self.samples = np.atleast_2d(np.loadtxt(fname, dtype=np.float32))[:,2:-1]
+        if self.samples.ndim != 2:
+          raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
 
-    self.samples = np.array(xf, copy=True, dtype=np.float32)
-                           
-    # save chain begins --------------------------------------------------------
-    hd=f"nwalkers={nwalkers}\n"
-    np.savetxt(f"{self.paramsf}.1.txt",
-               np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
-               fmt="%.9e",
-               header=hd + ' '.join(["weights", "lnp"] + names),
-               comments="# ")
-    
-    # save a range files -------------------------------------------------------
-    hd = ["weights","lnp"] + names + ["chi2*"]
-    rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
-    with open(f"{self.paramsf}.ranges", "w") as f: 
-      f.write(f"# {' '.join(hd)}\n")
-      f.writelines(f"{n} {l:.5e} {h:.5e}\n" for n, l, h in rows)
+        # append fail file begins ----------------------------------------------
+        fname = f"{self.failf}.txt";
+        failed = np.ones((nparams, 1), dtype=np.uint8) # start w/ all failed
+        with open(fname, "a") as f: # append mode
+          np.savetxt(f, failed.astype(np.uint8), fmt="%d")
 
-    # save paramname files -----------------------------------------------------
-    param_info = self.model.info()['params']
-    latex  = [param_info[x]['latex'] for x in names]
-    names.append("chi2*")
-    latex.append("\\chi^2")
-    np.savetxt(f"{self.paramsf}.paramnames", 
-               np.column_stack((names,latex)),
-               fmt="%s")
-    # save a cov matrix --------------------------------------------------------
-    samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.0'})
-    np.savetxt(f"{self.paramsf}.covmat",
-               np.array(samples.cov(), copy=True, dtype=np.float64),
-               fmt="%.9e",
-               header=' '.join(names),
-               comments="# ")
-    self.loadsamples = True
-    return self.loadsamples
+        self.failed = np.loadtxt(fname, dtype=np.uint8)
+        self.failed = np.asarray(self.failed).astype(bool)
+        if self.failed.ndim != 1:
+          raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
+
+        if self.samples.shape[0] != self.failed.shape[0]:
+          raise ValueError(f"Incompatible samples/failed chk files")
+
+        # increase number of rows of self.datavectors --------------------------
+        nrows = nparams
+        ncols = self.datavectors.shape[1]
+        zerosdvs = np.zeros((nrows, ncols), dtype=np.float32)
+        self.datavectors = np.vstack((self.datavectors, zerosdvs))
+        
+        if self.datavectors.shape[0] != self.samples.shape[0]:
+          raise ValueError(f"Incompatible samples/datavectir chk files")
+        # set  self.loadedfromchk ----------------------------------------------
+        self.loadedfromchk = True
+
+      # save a cov matrix ------------------------------------------------------
+      samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.'})
+      np.savetxt(f"{self.paramsf}.covmat",
+                 np.array(samples.cov(), copy=True, dtype=np.float64),
+                 fmt="%.9e",
+                 header=' '.join(names),
+                 comments="# ")
+    # set self.loadedsamples ---------------------------------------------------
+    self.loadedsamples = True
   
   #-----------------------------------------------------------------------------
   # datavectors
@@ -394,12 +453,12 @@ class dataset:
     nworkers = size - 1
         
     if size == 1:
-      if not self.loadsamples:
+      if not self.loadedsamples:
         raise RuntimeError(f"Model Samples not loaded/computed")
 
       nparams = len(self.samples)
 
-      if not self.loadchk:
+      if not self.loadedfromchk:
         self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
         self.failed = np.asarray(self.failed).astype(bool)
         
@@ -427,18 +486,18 @@ class dataset:
           continue
         self.datavectors[i] = dvs
 
-        if i % args.freqchk == 0:
+        if i % self.freqchk == 0:
           print(f"Model number: {i+1} (total: {nparams}) - checkpoint", flush=True)
           self.__save_chk()
       self.__save_chk()
     else:        
       if rank == 0:
-        if not self.loadsamples:
+        if not self.loadedsamples:
           sys.stderr.write(f"Model Samples not loaded/computed\n")
           sys.stderr.flush()
           comm.Abort(1)
         status = MPI.Status() 
-        block = args.freqchk
+        block = self.freqchk
         next_block = 1 
         too_frequent = True
         nparams = len(self.samples)
@@ -449,7 +508,7 @@ class dataset:
             comm.Abort(1)    
         completed = np.zeros(nparams, dtype=np.uint8)
 
-        if not self.loadchk:
+        if not self.loadedfromchk:
           self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
           self.failed = np.asarray(self.failed).astype(bool)
 
@@ -492,7 +551,7 @@ class dataset:
             self.failed[idx] = False
           completed[idx] = True
 
-          if not self.loadchk:
+          if not self.loadedfromchk:
             if count%block == 0:
               too_frequent = False
 
