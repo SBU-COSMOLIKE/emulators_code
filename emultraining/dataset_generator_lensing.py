@@ -638,83 +638,128 @@ class dataset:
           completed = ~self.failed
           idx0 = np.where(self.failed == True)[0]
         
-        tasks = deque(idx0.tolist())
+        tasks   = deque(idx0.tolist())
         nactive = min(nworkers, len(tasks))
+        active  = {} # Dict: key = worker (src), value: (idx, t_start)
         for w in range(1, nactive+1):
           j = tasks.popleft() 
-          comm.send((j, self.samples[j]), dest=w, tag=TTAG)
+          comm.send((j, self.samples[j]), dest = w, tag = TTAG)
+          active[w] = (j, MPI.Wtime())
 
-        count = 0
+        count  = 0
         while tasks:
-          kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
-                                     tag = RTAG,
-                                     status = status)
-          if kind == "err": # set datavector to zero and continue
-            self.datavectors[idx,:] = 0.0
+          # I need to protect the script against crashes (like CAMB/Class crash)
+          if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
+            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
+                                       tag = RTAG,
+                                       status = status)
             src = status.Get_source()
-            sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
-            sys.stderr.flush() 
-            self.failed[idx] = True
-          else:
-            self.datavectors[idx] = dvs 
-            self.failed[idx] = False
-          completed[idx] = True
+            if src in active:
+              del active[src]
+            
+            if kind == "err": # set datavector to zero and continue
+              self.datavectors[idx,:] = 0.0
+              self.failed[idx] = True
+              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+              sys.stderr.flush() 
+            else:
+              self.datavectors[idx] = dvs 
+              self.failed[idx] = False
+            completed[idx] = True
 
-          if not self.loadedfromchk:
-            if count%block == 0:
-              too_frequent = False
+            if not self.loadedfromchk:
+              if count%block == 0:
+                too_frequent = False
 
-            if not too_frequent:
-              start = (next_block - 1) * block
-              end   = min(nparams, next_block * block)
-              if completed[start:end].all():
+              if not too_frequent:
+                start = (next_block - 1) * block
+                end   = min(nparams, next_block * block)
+                if completed[start:end].all():
+                  self.__save_chk()
+                  too_frequent = True
+                  next_block += 1
+            else:
+              if count%block == 0:
                 self.__save_chk()
-                too_frequent = True
-                next_block += 1
+
+            j = tasks.popleft() 
+            count += 1
+            comm.send((j, self.samples[j]), 
+                      dest = status.Get_source(), 
+                      tag  = TTAG)
+            active[src] = (j, MPI.Wtime())
           else:
-            if count%block == 0:
-              self.__save_chk()
+            doabort = False
+            for w, (idxl, t0) in list(active.items()):
+              if (MPI.Wtime()-t0) > 300: # no worker should run > 5min w/o comm
+                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
+                sys.stderr.flush()
+                doabort = True
+            if doabort:
+              for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
+                self.datavectors[idxl,:] = 0.0
+                self.failed[idxl] = True
+              self.__save_chk() # save before crashing
+              comm.Abort(1) 
+            time.sleep(.1) # avoid 100% CPU usage
+        # end of while loop  
 
-          j = tasks.popleft() 
-          count += 1
-          comm.send((j, self.samples[j]), 
-                    dest = status.Get_source(), 
-                    tag  = TTAG)
-
-        for _ in range(nactive): # drain active workers
-          kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
-                                     tag = RTAG, 
-                                     status = status) # drain results 
-          if kind == "err":
-            self.datavectors[idx,:] = 0.0
-            self.failed[idx] = True
+        # drain active workers ------------------------------------------------
+        while active: 
+          if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
+            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
+                                       tag = RTAG, 
+                                       status = status) # drain results 
+            if kind == "err":
+              self.datavectors[idx,:] = 0.0
+              self.failed[idx] = True
+              src = status.Get_source()
+              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+              sys.stderr.flush()
+            else:
+              self.datavectors[idx] = dvs 
+              self.failed[idx] = False
+            completed[idx] = True
+            # Remove worker from active list
             src = status.Get_source()
-            sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
-            sys.stderr.flush()
+            if src in active:
+              del active[src]
           else:
-            self.datavectors[idx] = dvs 
-            self.failed[idx] = False
-          completed[idx] = True
+            doabort = False
+            for w, (idxl, t0) in list(active.items()):
+              if (MPI.Wtime()-t0) > 1800: # no worker should run > 30min w/o comm
+                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
+                sys.stderr.flush()
+                doabort = True
+            if doabort:
+              for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
+                self.datavectors[idxl,:] = 0.0
+                self.failed[idxl] = True
+              self.__save_chk() # save before crashing
+              comm.Abort(1)
+            time.sleep(.1) # avoid 100% CPU usage    
+        # end active workers
         
-        self.__save_chk() # save before sending stop sign
-        
+        # stop workers ---------------------------------------------------------
+        self.__save_chk() # save before sending stop sign 
+        active = {}       # reinitialize active (extra safety)
         for w in range(1, nworkers + 1): # stop workers
-          comm.send((0, None), dest=w, tag=STAG)      
-      
-        # Check if worker have crash (example: CAMB crash)
-        deadline = MPI.Wtime() + 1000.0
-        wkdone = set()
-        while len(wkdone) < nworkers:
+          comm.send((0, None), dest=w, tag=STAG)
+          active[w] = (0, MPI.Wtime())     
+        while active:
           if comm.Iprobe(source=MPI.ANY_SOURCE, tag=DTAG, status=status):
             _ = comm.recv(source=MPI.ANY_SOURCE, tag=DTAG, status=status)
-            wkdone.add(status.Get_source())
+            src = status.Get_source()
+            if src in active:
+              del active[src]
           else:
-            if MPI.Wtime() > deadline:
-              sys.stderr.write(f"[Rank 0] STOP worker timeout. Missing: " 
-                               f"{[x for x in range(1,nworkers+1) if x not in wkdone]}\n")
-              sys.stderr.flush()
-              comm.Abort(1)
-            time.sleep(0.01)
+            for w, (_, t0) in list(active.items()):
+              if (MPI.Wtime()-t0) > 1800: # no worker should run > 30min w/o comm
+                sys.stderr.write(f"[Rank 0] Worker {w} timed out (MPI DTAG)")
+                sys.stderr.flush()
+                comm.Abort(1)
+            time.sleep(.1) # avoid 100% CPU usage
+        # end stop workers
       
       else:
       
