@@ -335,11 +335,11 @@ class dataset:
 
         # need to be a bit careful with RAM here
         arr = np.load(f"{self.dvsf}.npy", mmap_mode="r", allow_pickle=False)
-        ramneed = arr.nbytes
-        ramavail = psutil.virtual_memory().available
-        if ramneed > 0.8 * ramavail:
-          print(f"Warning (RAM): datavectors need {ramneed/1e9:.2f} GB of RAM, "
-                f"but only {ramavail/1e9:.2f} GB of RAM is available")
+        RAMneed = arr.nbytes
+        RAMavail = psutil.virtual_memory().available
+        if RAMneed > 0.8 * RAMavail:
+          print(f"Warning (RAM): datavectors need {RAMneed/1e9:.2f} GB of RAM, "
+                f"but only {RAMavail/1e9:.2f} GB of RAM is available")
           self.datavectors = np.load(f"{self.dvsf}.npy", 
                                      mmap_mode="r+", 
                                      allow_pickle=False)
@@ -478,17 +478,19 @@ class dataset:
         # increase number of rows of self.datavectors (and save .npy)
         nrows = self.datavectors.shape[0]
         ncols = self.datavectors.shape[1]
-        zerosdvs = np.zeros((nparams, ncols), dtype=np.float32)
-        
-        # careful w/ RAM
+
+        # careful w/ RAM usage
         RAMneed = ( self.datavectors.nbytes + 
                     (nrows + nparams)*ncols*self.datavectors.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.8 * RAMavail:
+          zerosdvs = np.zeros((nparams, ncols), dtype=np.float32)
           self.datavectors = np.vstack((self.datavectors, zerosdvs))
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
         else:
+          print(f"Warning (RAM): datavectors need {RAMneed/1e9:.2f} GB of RAM, "
+                f"but only {RAMavail/1e9:.2f} GB of RAM is available")
           datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
                                     mmap_mode="w+", 
                                     shape=(nrows + nparams, ncols),
