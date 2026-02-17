@@ -1,5 +1,5 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc
+import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc, math
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
@@ -71,7 +71,7 @@ from numpy.lib.format import open_memmap
 # Command line args
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-parser = argparse.ArgumentParser(prog='dataset_generator')
+parser = argparse.ArgumentParser(prog='dataset_generator_lensing')
 
 parser.add_argument("--yaml",
                     dest="yaml",
@@ -88,28 +88,6 @@ parser.add_argument("--fileroot",
                     help="Subfolder of Project folder where we find yaml and fisher",
                     type=str,
                     required=True)
-parser.add_argument("--mode",
-                    dest="mode",
-                    help="generation mode = [train, valid, test]",
-                    type=str,
-                    choices=["train","valid","test"],
-                    default='train')
-parser.add_argument("--chain",
-                    dest="chain",
-                    help="only compute and output train/test/val chain",
-                    type=int,
-                    choices=[0,1],
-                    default=1)
-parser.add_argument("--nparams",
-                    dest="nparams",
-                    help="Number of Parameters to Generate",
-                    type=int,
-                    default=100000)
-parser.add_argument("--temp",
-                    dest="temp",
-                    help="Number of Parameters to Generate",
-                    type=int,
-                    default=128)
 parser.add_argument("--datavsfile",
                     dest="datavsfile",
                     help="File to save data vectors",
@@ -125,11 +103,29 @@ parser.add_argument("--failfile",
                     help="File that tells which cosmo param fail to compute dvs",
                     type=str,
                     required=True)
+parser.add_argument("--chain",
+                    dest="chain",
+                    help="only compute and output train/test/val chain",
+                    type=int,
+                    choices=[0,1],
+                    default=0)
+parser.add_argument("--nparams",
+                    dest="nparams",
+                    help="Requested Number of Parameters",
+                    type=int)
+parser.add_argument("--unif",
+                    dest="unif",
+                    help="Choose Between Uniform and Fisher based samples",
+                    type=int,
+                    choices=[0,1])
+parser.add_argument("--temp",
+                    dest="temp",
+                    help="Number of Parameters to Generate",
+                    type=int)
 parser.add_argument("--maxcorr",
                     dest="maxcorr",
                     help="Max correlation allowed",
-                    type=float,
-                    default=0.15)
+                    type=float)
 parser.add_argument("--loadchk",
                     dest="loadchk",
                     help="Load from chk if exists",
@@ -193,7 +189,7 @@ class dataset:
     self.loadchk = 0 if args.loadchk is None else args.loadchk 
     self.loadedfromchk = False  # check if loaded from checkpoint sucessfully
     self.loadedsamples = False  # check loaded samples sucessfully
-    self.maxcorr = 0.2 if args.maxcorr is None else args.maxcorr
+    self.maxcorr = 0.15 if args.maxcorr is None else args.maxcorr
     if not (0.01 < self.maxcorr <= 1):
       raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
@@ -206,6 +202,7 @@ class dataset:
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
       raise ValueError("--temp must be > 1")
+    self.unif = 0 if args.unif is None else args.unif
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -221,78 +218,86 @@ class dataset:
     # preferred ordering of params
     self.sampled_params = yamlopts['train_args']['ord'][0]
 
-    # load fiducial data vector
-    fid = yamlopts["train_args"]["fiducial"]
-    
-    # load cov param matrix
-    raw_covmat_file = yamlopts["train_args"]["params_covmat_file"]
-    with open(f"{fileroot}/{raw_covmat_file}") as f:
-      raw_covmat_params_names = np.array(f.readline().split()[1:])
-      raw_covmat = np.loadtxt(f) 
-    
     # load probe suffix
     probe = yamlopts["train_args"]["probe"]
-    
-    #---------------------------------------------------------------------------
-    # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
-    #---------------------------------------------------------------------------
-    # Reorder fiducial
-    self.fiducial = np.array([fid[p] for p in self.sampled_params], 
-                             copy=True, dtype=self.dtype)
 
-    # Reorder covmat
-    pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
-    try:
-      idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
-    except KeyError as e:
-      raise ValueError(f"{e.args[0]!r} not found in cov header") from None
-    covmat = raw_covmat[np.ix_(idx, idx)]
-    
+    if not self.unif == 1:
+      # load fiducial data vector
+      fid = yamlopts["train_args"]["fiducial"]
+      
+      # load cov param matrix
+      raw_covmat_file = yamlopts["train_args"]["params_covmat_file"]
+      with open(f"{fileroot}/{raw_covmat_file}") as f:
+        raw_covmat_params_names = np.array(f.readline().split()[1:])
+        raw_covmat = np.loadtxt(f) 
+      
+      #-------------------------------------------------------------------------
+      # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
+      #-------------------------------------------------------------------------
+      # Reorder fiducial
+      self.fiducial = np.array([fid[p] for p in self.sampled_params], 
+                               copy=True, dtype=self.dtype)
+
+      # Reorder covmat
+      pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
+      try:
+        idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
+      except KeyError as e:
+        raise ValueError(f"{e.args[0]!r} not found in cov header") from None
+      covmat = raw_covmat[np.ix_(idx, idx)]
+      
     # Reorder bounds
     names = list(self.model.parameterization.sampled_params().keys())
     pidx = {p : i for i, p in enumerate(names)}
     idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
                            copy=True, dtype=self.dtype)[idx,:] 
-    #---------------------------------------------------------------------------
-    # Reduce correlation on the covariance matrix to max = args.maxcorr
-    #---------------------------------------------------------------------------
-    sig   = np.sqrt(np.diag(covmat))
-    n = len(sig)
-    outer = np.outer(sig, sig)
-    corr  = covmat / outer 
-    m = np.abs(corr - np.eye(n)).max()
-    corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
-    np.fill_diagonal(corr, 1.0)
-    covmat = corr * outer
+    
+    if not self.unif == 1:
+      #-------------------------------------------------------------------------
+      # Reduce correlation on the covariance matrix to max = args.maxcorr
+      #-------------------------------------------------------------------------
+      sig   = np.sqrt(np.diag(covmat))
+      n = len(sig)
+      outer = np.outer(sig, sig)
+      corr  = covmat / outer 
+      m = np.abs(corr - np.eye(n)).max()
+      corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
+      np.fill_diagonal(corr, 1.0)
+      covmat = corr * outer
 
-    #---------------------------------------------------------------------------
-    # Compute covmat inverse
-    #---------------------------------------------------------------------------
-    C = 0.5 * (covmat + covmat.T)  # enforce symmetry
-    jitt = 0.0
-    for _ in range(10):
-      try:
-        L = np.linalg.cholesky(C + jitt*np.eye(C.shape[0]))
-        break
-      except np.linalg.LinAlgError:
-        scale = np.mean(np.diag(C)) # scale jitt to matrix sz start tiny -> grow
-        jitt = (1e-12 * scale if jitt == 0 else jitt*10)
-    else:
-      raise np.linalg.LinAlgError("could not stabilized cov to SPD w/ jitter")
-    I = np.eye(C.shape[0])
-    self.covmat = C + jitt*np.eye(C.shape[0])
-    self.inv_covmat = np.linalg.solve(L.T, np.linalg.solve(L, I))
+      #-------------------------------------------------------------------------
+      # Compute covmat inverse
+      #-------------------------------------------------------------------------
+      C = 0.5 * (covmat + covmat.T)  # enforce symmetry
+      jitt = 0.0
+      for _ in range(10):
+        try:
+          L = np.linalg.cholesky(C + jitt*np.eye(C.shape[0]))
+          break
+        except np.linalg.LinAlgError:
+          scale = np.mean(np.diag(C)) # scale jitt to matrix sz start tiny -> grow
+          jitt = (1e-12 * scale if jitt == 0 else jitt*10)
+      else:
+        raise np.linalg.LinAlgError("could not stabilized cov to SPD w/ jitter")
+      I = np.eye(C.shape[0])
+      self.covmat = C + jitt*np.eye(C.shape[0])
+      self.inv_covmat = np.linalg.solve(L.T, np.linalg.solve(L, I))
 
     #---------------------------------------------------------------------------
     # Define output files
     #---------------------------------------------------------------------------
     datavsfile = Path(args.datavsfile).stem
-    self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{self.temp}"
     paramfile = Path(args.paramfile).stem
-    self.paramsf = f"{root}/chains/{paramfile}_{probe}_{self.temp}"
     failfile = Path(args.failfile).stem
-    self.failf = f"{root}/chains/{failfile}_{probe}_{self.temp}"
+    if not self.unif == 1:
+      self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{self.temp}"
+      self.paramsf = f"{root}/chains/{paramfile}_{probe}_{self.temp}"
+      self.failf = f"{root}/chains/{failfile}_{probe}_{self.temp}"
+    else:
+      self.dvsf = f"{root}/chains/{datavsfile}_{probe}_unifs"
+      self.paramsf = f"{root}/chains/{paramfile}_{probe}_unifs"
+      self.failf = f"{root}/chains/{failfile}_{probe}_unifs"
     
     #---------------------------------------------------------------------------
     # Setup Done
@@ -305,7 +310,11 @@ class dataset:
   def __param_logpost(self,x):
     y = x - self.fiducial
     logprior = self.model.prior.logp(x)
-    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
+    if math.isinf(logprior):
+      return -np.inf 
+    else:
+      logp = (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
+      return logp
 
   #-----------------------------------------------------------------------------
   # save/load checkpoint
@@ -331,7 +340,6 @@ class dataset:
           raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
         
         if self.samples.shape[0] != self.failed.shape[0]:
-          print(self.samples.shape[0], self.failed.shape[0])
           raise ValueError(f"Incompatible samples/failed chk files")
 
         # load datavectors begins ----------------------------------------------
@@ -390,45 +398,56 @@ class dataset:
       ndim     = len(self.sampled_params)
       names    = list(self.sampled_params)
       bds      = self.bounds
-      nwalkers = int(3*ndim)
-      nsteps   = int(max(7500, self.nparams/nwalkers)) # (for safety we assume tau>100)
-      burnin   = int(0.3*nsteps)                       # 30% burn-in
-      thin     = max(1,int(float((nsteps-burnin)*nwalkers)/self.nparams)-1)
-      
-      sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
-                                      ndim = ndim, 
-                                      moves=[(emcee.moves.DEMove(), 0.8),
-                                             (emcee.moves.DESnookerMove(), 0.2)],
-                                      log_prob_fn = self.__param_logpost)
-      sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
-                                       0.5*np.sqrt(np.diag(self.covmat))*
-                                       np.random.normal(size=(nwalkers, ndim)), 
-                       nsteps=nsteps, 
-                       progress=False)
+      nparams  = self.nparams # (if mcmc: nparams will be updated)
 
-      xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
-      nparams = np.atleast_2d(xf).shape[0]
-      lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
-      w    = np.ones((nparams, 1), dtype=np.uint8)
+      if not self.unif == 1:
+        nwalkers = int(3*ndim)
+        nsteps   = int(max(7500, nparams/nwalkers)) # (for safety we assume tau>100)
+        burnin   = int(0.3*nsteps)                       # 30% burn-in
+        thin     = max(1,int(0.8*float((nsteps-burnin)*nwalkers)/nparams))
+        
+        sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
+                                        ndim = ndim, 
+                                        moves=[(emcee.moves.DEMove(), 0.8),
+                                               (emcee.moves.DESnookerMove(), 0.2)],
+                                        log_prob_fn = self.__param_logpost)
+        sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
+                                         0.5*np.sqrt(np.diag(self.covmat))*
+                                         np.random.normal(size=(nwalkers,ndim)), 
+                         nsteps=nsteps, 
+                         progress=False)
+        
+        xf  = sampler.get_chain(flat = True, discard = burnin, thin = thin)
+        lnp = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
+        xf  = xf[:nparams,:]
+        lnp = np.atleast_2d(lnp[:nparams]).T
+      else:
+        xf  = np.random.uniform(low  = bds[:,0], 
+                                high = bds[:,1], 
+                                size = (nparams,ndim))
+        lnp = np.ones((nparams,1), dtype=np.uint8)
+      
+      w = np.ones((nparams,1), dtype=np.uint8)
       chi2 = -2*lnp
 
       if not loadedfromchk:
         # Output some debug messaging ------------------------------------------
-        try:
-          tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                       copy=True, 
-                       dtype=self.dtype).max()
-          print(f"Partial Result: tau = {tau}\n"
-                f"nwalkers={nwalkers}\n"
-                f"nsteps (per walker) = {nsteps}\n"
-                f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
-                f"nparams (after thin)={nparams}\n")
-        except Exception as e:
-          print(f"Partial Result: tau = N/A (emcee threw an exception)\n"
-                f"nwalkers={nwalkers}\n"
-                f"nsteps (per walker) = {nsteps}\n"
-                f"nparams (after thin)={nparams}\n")
-          tau = 1 # make sure main MPI worker does not crash over trivial check
+        if not self.unif == 1:
+          try:
+            tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
+                         copy=True, 
+                         dtype=self.dtype).max()
+            print(f"Partial Result: tau = {tau}\n"
+                  f"nwalkers={nwalkers}\n"
+                  f"nsteps (per walker) = {nsteps}\n"
+                  f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
+                  f"nparams (after thin)={nparams}\n")
+          except Exception as e:
+            print(f"Partial Result: tau = N/A (emcee threw an exception)\n"
+                  f"nwalkers={nwalkers}\n"
+                  f"nsteps (per walker) = {nsteps}\n"
+                  f"nparams (after thin)={nparams}\n")
+            tau = 1 # make sure main MPI worker does not crash over trivial check
         # save a range files ---------------------------------------------------
         hd = ["weights","lnp"] + names + ["chi2*"]
         rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
@@ -445,9 +464,12 @@ class dataset:
                    fmt="%s")
         # save chain begins ----------------------------------------------------
         fname = f"{self.paramsf}.1.txt";
-        hd=f"nwalkers={nwalkers}\n"
+        if not self.unif == 1:
+          hd=f"nwalkers={nwalkers}\n"
+        else:
+          hd=f"Uniform Sampling\n"
         np.savetxt(fname,
-                   np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
+                   np.concatenate([w, lnp, xf, chi2], axis=1),
                    fmt="%.9e",
                    header=hd + ' '.join(["weights", "lnp"] + names),
                    comments="# ")
@@ -464,7 +486,7 @@ class dataset:
         with open(fname, "a") as f: # append mode
           hd = f"nwalkers={nwalkers}\n" + ' '.join(["weights","lnp"]+names)
           np.savetxt(f, 
-                     np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1), 
+                     np.concatenate([w, lnp, xf, chi2], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
                      fmt = "%.9e")
         del w         # save RAM memory
@@ -473,6 +495,7 @@ class dataset:
         del chi2      # save RAM memory
         gc.collect()  # save RAM memory
         
+
         self.samples = np.atleast_2d(np.loadtxt(fname, dtype=self.dtype))[:,2:-1]
         if self.samples.ndim != 2:
           raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
