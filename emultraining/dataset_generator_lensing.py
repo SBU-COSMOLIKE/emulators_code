@@ -1,5 +1,5 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil
+import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
@@ -180,6 +180,7 @@ class dataset:
     self.append = 0 if args.append is None else args.append
     self.bounds = None
     self.covmat = None 
+    self.dtype = np.float32
     self.dvsf = None 
     self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
@@ -237,7 +238,7 @@ class dataset:
     #---------------------------------------------------------------------------
     # Reorder fiducial
     self.fiducial = np.array([fid[p] for p in self.sampled_params], 
-                             copy=True, dtype=np.float32)
+                             copy=True, dtype=self.dtype)
 
     # Reorder covmat
     pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
@@ -252,7 +253,7 @@ class dataset:
     pidx = {p : i for i, p in enumerate(names)}
     idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
-                           copy=True, dtype=np.float32)[idx,:] 
+                           copy=True, dtype=self.dtype)[idx,:] 
     #---------------------------------------------------------------------------
     # Reduce correlation on the covariance matrix to max = args.maxcorr
     #---------------------------------------------------------------------------
@@ -320,7 +321,7 @@ class dataset:
       if loadchk:
         # row 0/1 rows are weights, lnp. Last row is chi2
         self.samples = np.atleast_2d(np.loadtxt(f"{self.paramsf}.1.txt", 
-                                                dtype=np.float32))[:,2:-1]
+                                                dtype=self.dtype))[:,2:-1]
         if self.samples.ndim != 2:
           raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
         
@@ -333,8 +334,10 @@ class dataset:
           print(self.samples.shape[0], self.failed.shape[0])
           raise ValueError(f"Incompatible samples/failed chk files")
 
-        # need to be a bit careful with RAM usage here
-        arr = np.load(f"{self.dvsf}.npy", mmap_mode="r", allow_pickle=False)
+        # load datavectors begins ----------------------------------------------
+        arr = np.load(f"{self.dvsf}.npy", 
+                      mmap_mode="r", 
+                      allow_pickle=False)
         RAMneed = arr.nbytes + self.samples.nbytes + self.failed.nbytes
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
@@ -344,12 +347,13 @@ class dataset:
           print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
                 f"We will read dvs from HD (slow)")
-          self.dvs_is_memmap = True
           self.datavectors = np.load(f"{self.dvsf}.npy", 
                                      mmap_mode="r+", 
                                      allow_pickle=False)
           self.dvs_is_memmap = True
-          
+        del arr
+        # load datavectors ends ------------------------------------------------
+
         if self.datavectors.ndim != 2:
           raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
@@ -405,15 +409,15 @@ class dataset:
       xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
       nparams = np.atleast_2d(xf).shape[0]
       lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
-      w    = np.ones((nparams, 1), dtype = np.float32)
+      w    = np.ones((nparams, 1), dtype=np.uint8)
       chi2 = -2*lnp
-      
-      if loadedfromchk == False:
+
+      if not loadedfromchk:
         # Output some debug messaging ------------------------------------------
         try:
           tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
                        copy=True, 
-                       dtype=np.float32).max()
+                       dtype=self.dtype).max()
           print(f"Partial Result: tau = {tau}\n"
                 f"nwalkers={nwalkers}\n"
                 f"nsteps (per walker) = {nsteps}\n"
@@ -448,7 +452,12 @@ class dataset:
                    header=hd + ' '.join(["weights", "lnp"] + names),
                    comments="# ")
         # copy samples to self.samples  ----------------------------------------
-        self.samples = np.array(xf, copy=True, dtype=np.float32)
+        self.samples = np.array(xf, copy=True, dtype=self.dtype)
+        del w         # save RAM memory
+        del xf        # save RAM memory
+        del lnp       # save RAM memory
+        del chi2      # save RAM memory
+        gc.collect()  # save RAM memory
       else:
         # append chain file begins ---------------------------------------------
         fname = f"{self.paramsf}.1.txt";
@@ -458,8 +467,13 @@ class dataset:
                      np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
                      fmt = "%.9e")
+        del w         # save RAM memory
+        del xf        # save RAM memory
+        del lnp       # save RAM memory
+        del chi2      # save RAM memory
+        gc.collect()  # save RAM memory
         
-        self.samples = np.atleast_2d(np.loadtxt(fname, dtype=np.float32))[:,2:-1]
+        self.samples = np.atleast_2d(np.loadtxt(fname, dtype=self.dtype))[:,2:-1]
         if self.samples.ndim != 2:
           raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
 
@@ -477,18 +491,17 @@ class dataset:
         if self.samples.shape[0] != self.failed.shape[0]:
           raise ValueError(f"Incompatible samples/failed chk files")
 
-        # increase number of rows of self.datavectors (and save .npy)
+        # Expand dvs begins ----------------------------------------------------
         nrows = self.datavectors.shape[0]
         ncols = self.datavectors.shape[1]
  
-        # need to be a bit careful with RAM usage here
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
                     self.datavectors.nbytes + 
                     (nrows + nparams)*ncols*self.datavectors.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
-          zerosdvs = np.zeros((nparams, ncols), dtype=np.float32)
-          self.datavectors = np.vstack((self.datavectors, zerosdvs))
+          self.datavectors = np.vstack((self.datavectors, 
+                                        np.zeros((nparams,ncols),dtype=self.dtype)))
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
           self.dvs_is_memmap = False
@@ -497,7 +510,7 @@ class dataset:
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
                 f"We will read dvs from HD (slow)")
           datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
-                                    mmap_mode="w+", 
+                                    mode="w+",
                                     shape=(nrows + nparams, ncols),
                                     dtype=self.datavectors.dtype)
           for s in range(0, nrows, 2500): # chunks = avoid RAM spikes) 
@@ -513,16 +526,19 @@ class dataset:
                                      mmap_mode="r+", 
                                      allow_pickle=False)
           self.dvs_is_memmap = True
-
+        # Expand dvs ends ------------------------------------------------------
+        
+        # check final dimensions -----------------------------------------------
         if self.datavectors.shape[0] != self.samples.shape[0]:
           raise ValueError(f"Incompatible samples/datavectir chk files")
+        
         # set  self.loadedfromchk ----------------------------------------------
         self.loadedfromchk = True
 
       # save a cov matrix ------------------------------------------------------
       samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.'})
       np.savetxt(f"{self.paramsf}.covmat",
-                 np.array(samples.cov(), copy=True, dtype=np.float64),
+                 np.array(samples.cov(), copy=True, dtype=self.dtype),
                  fmt="%.9e",
                  header=' '.join(names),
                  comments="# ")
@@ -548,7 +564,9 @@ class dataset:
             dependency_params=[param[p] for p in z],
             cached=False
         )
-    return np.array(likelihood.get_datavector(**param), copy=True, dtype=np.float32)
+    return np.array(likelihood.get_datavector(**param), 
+                    copy=True, 
+                    dtype=self.dtype)
 
   def __generate_datavectors(self):
     if not self.setup:
@@ -581,23 +599,25 @@ class dataset:
                              f"Cannot determine datavector length.")
         nrows = nparams
         ncols = len(dvs)
-        # need to be a bit careful with RAM usage here 
+        # Allocate dvs begins --------------------------------------------------
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
                     nrows*ncols*dvs.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
-          self.datavectors = np.zeros((nrows, ncols), dtype=np.float32)
+          self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
           self.dvs_is_memmap = False
         else:
           print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                 f"There is {RAMavail/1e9:.2f} GB of RAM available."
                 f"We will read dvs from HD (slow)")
           self.datavectors = open_memmap(f"{self.dvsf}.npy", 
-                                         mmap_mode="w+", 
-                                         shape=(nrows, ncols),
-                                         dtype=dvs.dtype.itemsize)
+                                       mode="w+",
+                                       shape=(nrows, ncols),
+                                       dtype=self.dtype)
+          self.datavectors[:] = 0.0
+          self.datavectors.flush()
           self.dvs_is_memmap = True
-
+        # Allocate dvs end -----------------------------------------------------
         self.datavectors[0] = dvs
         self.failed[0] = False
         idx = np.arange(1, nparams)
@@ -630,12 +650,7 @@ class dataset:
         block = self.freqchk
         next_block = 1 
         too_frequent = True
-        nparams = len(self.samples)
-        if nparams < nworkers:
-            sys.stderr.write(f"num params (={nparams}) < "
-                             f"MPI workers (={nworkers})\n")
-            sys.stderr.flush()
-            comm.Abort(1)    
+        nparams = len(self.samples)   
         completed = np.zeros(nparams, dtype=np.uint8)
 
         if not self.loadedfromchk:
@@ -650,26 +665,27 @@ class dataset:
                              f"aborting MPI job\n")
             sys.stderr.flush()
             comm.Abort(1)
-          # TODO: CHECK FOR RAM USAGE
           nrows = nparams
           ncols = len(dvs)
-          # need to be a bit careful with RAM usage here 
+          # Allocate dvs begins ------------------------------------------------
           RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
-                      nrows*ncols*dv.dtype.itemsize)
+                      nrows*ncols*dvs.dtype.itemsize)
           RAMavail = psutil.virtual_memory().available
           if RAMneed < 0.75 * RAMavail:
-            self.datavectors = np.zeros((nrows, ncols), dtype=np.float32)
+            self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
             self.dvs_is_memmap = False
           else:
             print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
                   f"There is {RAMavail/1e9:.2f} GB of RAM available."
                   f"We will read dvs from HD (slow)")
             self.datavectors = open_memmap(f"{self.dvsf}.npy", 
-                                           mmap_mode="w+", 
-                                           shape=(nrows, ncols),
-                                           dtype=dv.dtype.itemsize)
+                                         mode="w+",
+                                         shape=(nrows, ncols),
+                                         dtype=self.dtype)
+            self.datavectors[:] = 0.0
+            self.datavectors.flush()
             self.dvs_is_memmap = True
-
+          # Allocate dvs end ---------------------------------------------------
           self.datavectors[0] = dvs
           self.failed[0] = False
           completed[0] = True
@@ -703,7 +719,8 @@ class dataset:
             if kind == "err": # set datavector to zero and continue
               self.datavectors[idx,:] = 0.0
               self.failed[idx] = True
-              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
+                               f"Reason: {dvs}\n")
               sys.stderr.flush() 
             else:
               self.datavectors[idx] = dvs 
@@ -732,15 +749,15 @@ class dataset:
             active[src] = (j, MPI.Wtime())
           else:
             doabort = False
-            for w, (idxl, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TASK_TIMEOUT
-                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
+            for w, (idx, t0) in list(active.items()):
+              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TIMEOUT
+                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idx} timed out (MPI RTAG)")
                 sys.stderr.flush()
                 doabort = True
             if doabort:
-              for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
-                self.datavectors[idxl,:] = 0.0
-                self.failed[idxl] = True
+              for w, (idx, t0) in list(active.items()): # mark all running tasks as failed
+                self.datavectors[idx,:] = 0.0
+                self.failed[idx] = True
                 completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1) 
@@ -760,7 +777,8 @@ class dataset:
             if kind == "err":
               self.datavectors[idx,:] = 0.0
               self.failed[idx] = True
-              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n")
+              sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
+                               f"Reason: {dvs}\n")
               sys.stderr.flush()
             else:
               self.datavectors[idx] = dvs 
@@ -770,15 +788,15 @@ class dataset:
               del active[src]
           else:
             doabort = False
-            for w, (idxl, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TASK_TIMEOUT
-                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idxl} timed out (MPI RTAG)")
+            for w, (idx, t0) in list(active.items()):
+              if (MPI.Wtime()-t0) > TASK_TIMEOUT: # no task runtime > TIMEOUT
+                sys.stderr.write(f"[Rank 0] Worker {w} at idx={idx} timed out (MPI RTAG)")
                 sys.stderr.flush()
                 doabort = True
             if doabort:
-              for w, (idxl, t0) in list(active.items()): # mark all running tasks as failed
-                self.datavectors[idxl,:] = 0.0
-                self.failed[idxl] = True
+              for w, (idx, t0) in list(active.items()): # mark all running tasks as failed
+                self.datavectors[idx,:] = 0.0
+                self.failed[idx] = True
                 completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1)
@@ -802,7 +820,7 @@ class dataset:
               del active[src]
           else:
             for w, (_, t0) in list(active.items()):
-              if (MPI.Wtime()-t0) > STOP_TIMEOUT: # no task runtime > STOP_TIMEOUT
+              if (MPI.Wtime()-t0) > STOP_TIMEOUT: # no task runtime > TIMEOUT
                 sys.stderr.write(f"[Rank 0] Worker {w} timed out (MPI DTAG)")
                 sys.stderr.flush()
                 comm.Abort(1)
@@ -825,7 +843,9 @@ class dataset:
             dvs = self._compute_dvs_from_sample(sample)
             comm.send(("ok", idx, dvs), dest = 0, tag = RTAG)
           except Exception:
-            comm.send(("err", idx, None), dest = 0, tag = RTAG)
+            comm.send(("err", idx, traceback.format_exc(limit=8)), 
+                      dest = 0, 
+                      tag = RTAG)
             continue
     return
 
