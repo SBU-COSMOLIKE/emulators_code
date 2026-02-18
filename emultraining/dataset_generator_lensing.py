@@ -13,59 +13,56 @@ from numpy.lib.format import open_memmap
 # Example how to run this program
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-#mpirun -n 2 --oversubscribe \
-#  python external_modules/code/emulators/emultrf/emultraining/dataset_generator_lensing.py \
-#    --root projects/roman_real/  \
-#    --fileroot emulators/nla_cosmic_shear/ \
-#    --nparams 1000 \
-#    --temp 128 \
-#    --yaml 'w0wa_takahashi_cs_CNN.yaml' \
-#    --datavsfile 'w0wa_takahashi_dvs_train' \
-#    --paramfile 'w0wa_takahashi_params_train' \
-#    --failfile  'w0wa_params_failed_train' \
-#    --chain 1 \
-#    --maxcorr 0.15 \
-#    --freqchk 2000 \
-#    --loadchk 1 \
-#    --append 0 
-
-# Training requires an input covariance, specified in the 
-# `params_covmat_file` keyword defined in the YAML file. 
-# For example, the YAML `w0wa_takahashi_cs_CNN.yaml` selects 
-# the Fisher-based 'w0wa_fisher_covmat.txt' covariance matrix. 
-# The `--maxcorr` parameter then reduces the two-dimensional 
-# parameter correlations of the input covariance matrix.
-
-# For simplicity, we reduced the requested number of data vectors 
-# (`--nparams 10000`) and the temperature of the parameter 
-# distribution (`--temp 64`). The actual number of data vectors 
-# is not exactly `--nparams`, but it is quite close. 
-
-# For visualization purposes, setting `--chain 1` sets the script 
-# to generate the training parameters without computing the data vectors. 
-# The output files are
+# The script below computes data vectors for cosmic shear (NLA, $w_0w_a$ model and Halofit.
 #
-#  Distribution of training points ready to be plotted by GetDist
-#  w0wa_params_train_cs_64.1.txt
-#  w0wa_params_train_cs_64.covmat
-#  w0wa_params_train_cs_64.paramnames
-#  w0wa_params_train_cs_64.ranges
+#     mpirun -n 10 --oversubscribe \
+#       python external_modules/code/emulators/emultrf/emultraining/dataset_generator_lensing.py \
+#         --root projects/roman_real/  \
+#         --fileroot emulators/nla_cosmic_shear/ \
+#         --nparams 10000 \
+#         --yaml 'w0wa_takahashi_cs_CNN.yaml' \
+#         --datavsfile 'w0wa_takahashi_dvs_train' \
+#         --paramfile 'w0wa_takahashi_params_train' \
+#         --failfile  'w0wa_takahashi_params_failed_train' \
+#         --chain 0 \
+#         --unif 0 \
+#         --temp 64 \
+#         --maxcorr 0.15 \
+#         --freqchk 2000 \
+#         --loadchk 0 \
+#         --append 1 
 #
-#  Corresponding data vectors
-#  w0wa_takahashi_nobaryon_dvs_train_cs_64.npy
-#  Training parameters in which the data vector computation failed
-#  w0wa_params_failed_train_cs_64.txt
-
-# The flags `--freqchk`, `--loadchk`, and `--append` are related to checkpoints. 
-# - The option `--freqchk` sets the frequency at which the 
-#   code saves checkpoints (chk).
-# - The options `--loadchk` and `--append` specify whether 
-#   the code loads the parameters and data vectors from a chk.
-#   In the two cases below, the code determines which remaining data vectors to 
-#   compute based on the flags saved in the `--failfile` file.
-#     - Case 1 (`--loadchk 1` and `--append 1`): the code loads 
-#       params from the chk and appends `~nparams` models to it. 
-#     - Case 2 (`--loadchk 1` and `--append 0`): the code loads the params.
+#- The requested number of data vectors is given by the `--nparams` flag.
+#
+#- There are two possible samplings.
+#  - The option `--unif 1` sets the sampling to follow a uniform distribution (respecting parameter boundaries set in the YAML file)
+#  - The option `--unif 0` sets the sampling to follow a Gaussian distribution with the following options
+#    -  The covariance matrix is set in the YAML file (keyword `params_covmat_file` inside the `train_args` block).
+#       For example, our provided YAML selects the Fisher-based *w0wa_fisher_covmat.txt* covariance matrix
+#    -  Temperature reduces the curvature of the likelihood (`cov = cov/T`) and is set by `--temp` flag 
+#    -  The correlations of the original covariance matrix are reduced to be less than `--maxcorr`.
+#
+#- For visualization purposes, setting `--chain 1` sets the script to generate the training parameters without computing the data vectors.
+#
+#- The output files are
+#
+#      # Distribution of training points ready to be plotted by GetDist
+#      w0wa_params_train_cs_64.1.txt
+#      w0wa_params_train_cs_64.covmat
+#      w0wa_params_train_cs_64.paramnames
+#      w0wa_params_train_cs_64.ranges
+#
+#      #Corresponding data vectors
+#      w0wa_takahashi_nobaryon_dvs_train_cs_64.npy
+#      # Training parameters in which the data vector computation failed
+#      w0wa_params_failed_train_cs_64.txt
+#
+#- The flags `--freqchk`, `--loadchk`, and `--append` are related to checkpoints. 
+#  - The option `--freqchk` sets the frequency at which the code saves checkpoints (chk).
+#  - The options `--loadchk` and `--append` specify whether the code loads the parameters and data vectors from a chk.
+#    In the two cases below, the code determines which remaining data vectors to compute based on the flags saved in the `--failfile` file.
+#      - Case 1 (`--loadchk 1` and `--append 1`): the code loads params from the chk and appends `~nparams` models to it. 
+#      - Case 2 (`--loadchk 1` and `--append 0`): the code loads the params.
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -112,12 +109,14 @@ parser.add_argument("--chain",
 parser.add_argument("--nparams",
                     dest="nparams",
                     help="Requested Number of Parameters",
-                    type=int)
+                    type=int,
+                    required=True)
 parser.add_argument("--unif",
                     dest="unif",
                     help="Choose Between Uniform and Fisher based samples",
                     type=int,
-                    choices=[0,1])
+                    choices=[0,1],
+                    required=True)
 parser.add_argument("--temp",
                     dest="temp",
                     help="Number of Parameters to Generate",

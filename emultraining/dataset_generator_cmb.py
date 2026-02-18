@@ -1,29 +1,19 @@
 import numpy as np
-import cobaya
+import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc, math
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
-import sys
-import os
-import platform
-import yaml
 from mpi4py import MPI
-from scipy.stats import qmc
-import copy
-import functools, iminuit, copy, argparse, random, time 
-import emcee, itertools
-from schwimmbad import MPIPool
-#-------------------------------------------------------------------------------
-#-------------------------------------------------------------------------------
-# Example how to run this program
-#-------------------------------------------------------------------------------
-#-------------------------------------------------------------------------------
-# (...) TODO
+from tqdm import tqdm
+from pathlib import Path
+from getdist import loadMCSamples
+from collections import deque
+from numpy.lib.format import open_memmap
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-parser = argparse.ArgumentParser(prog='dataset_generator_cmb')
+parser = argparse.ArgumentParser(prog='dataset_generator_lensing')
 
 parser.add_argument("--yaml",
                     dest="yaml",
@@ -62,14 +52,21 @@ parser.add_argument("--chain",
                     choices=[0,1],
                     default=0)
 parser.add_argument("--nparams",
-                    dest="--nparams",
+                    dest="nparams",
                     help="Requested Number of Parameters",
-                    type=int)
+                    type=int,
+                    required=True)
+parser.add_argument("--mode",
+                    dest="mode",
+                    help="Which CMB data vector",
+                    type=str,
+                    choices=["tt","te","ee","pp"])
 parser.add_argument("--unif",
                     dest="unif",
                     help="Choose Between Uniform and Fisher based samples",
                     type=int,
-                    choices=[0,1])
+                    choices=[0,1],
+                    required=True)
 parser.add_argument("--temp",
                     dest="temp",
                     help="Number of Parameters to Generate",
@@ -141,7 +138,7 @@ class dataset:
     self.loadchk = 0 if args.loadchk is None else args.loadchk 
     self.loadedfromchk = False  # check if loaded from checkpoint sucessfully
     self.loadedsamples = False  # check loaded samples sucessfully
-    self.maxcorr = 0.2 if args.maxcorr is None else args.maxcorr
+    self.maxcorr = 0.15 if args.maxcorr is None else args.maxcorr
     if not (0.01 < self.maxcorr <= 1):
       raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
@@ -154,7 +151,7 @@ class dataset:
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
       raise ValueError("--temp must be > 1")
-    self.unif = 1 if args.unif is None else args.unif
+    self.unif = 0 if args.unif is None else args.unif
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
     #---------------------------------------------------------------------------
@@ -180,12 +177,9 @@ class dataset:
         raw_covmat_params_names = np.array(f.readline().split()[1:])
         raw_covmat = np.loadtxt(f) 
       
-      # load probe suffix
-      probe = yamlopts["train_args"]["probe"]
-      
-      #---------------------------------------------------------------------------
+      #-------------------------------------------------------------------------
       # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
-      #---------------------------------------------------------------------------
+      #-------------------------------------------------------------------------
       # Reorder fiducial
       self.fiducial = np.array([fid[p] for p in self.sampled_params], 
                                copy=True, dtype=self.dtype)
@@ -197,7 +191,7 @@ class dataset:
       except KeyError as e:
         raise ValueError(f"{e.args[0]!r} not found in cov header") from None
       covmat = raw_covmat[np.ix_(idx, idx)]
-    
+      
     # Reorder bounds
     names = list(self.model.parameterization.sampled_params().keys())
     pidx = {p : i for i, p in enumerate(names)}
@@ -240,11 +234,16 @@ class dataset:
     # Define output files
     #---------------------------------------------------------------------------
     datavsfile = Path(args.datavsfile).stem
-    self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{self.temp}"
     paramfile = Path(args.paramfile).stem
-    self.paramsf = f"{root}/chains/{paramfile}_{probe}_{self.temp}"
     failfile = Path(args.failfile).stem
-    self.failf = f"{root}/chains/{failfile}_{probe}_{self.temp}"
+    if not self.unif == 1:
+      self.dvsf = f"{root}/chains/{datavsfile}_{args.probe}_{self.temp}"
+      self.paramsf = f"{root}/chains/{paramfile}_{args.probe}_{self.temp}"
+      self.failf = f"{root}/chains/{failfile}_{args.probe}_{self.temp}"
+    else:
+      self.dvsf = f"{root}/chains/{datavsfile}_{args.probe}_unifs"
+      self.paramsf = f"{root}/chains/{paramfile}_{args.probe}_unifs"
+      self.failf = f"{root}/chains/{failfile}_{args.probe}_unifs"
     
     #---------------------------------------------------------------------------
     # Setup Done
@@ -257,7 +256,11 @@ class dataset:
   def __param_logpost(self,x):
     y = x - self.fiducial
     logprior = self.model.prior.logp(x)
-    return (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
+    if math.isinf(logprior):
+      return -np.inf 
+    else:
+      logp = (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
+      return logp
 
   #-----------------------------------------------------------------------------
   # save/load checkpoint
@@ -283,7 +286,6 @@ class dataset:
           raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
         
         if self.samples.shape[0] != self.failed.shape[0]:
-          print(self.samples.shape[0], self.failed.shape[0])
           raise ValueError(f"Incompatible samples/failed chk files")
 
         # load datavectors begins ----------------------------------------------
@@ -342,12 +344,13 @@ class dataset:
       ndim     = len(self.sampled_params)
       names    = list(self.sampled_params)
       bds      = self.bounds
-      
-      if not self.unif == 1
+      nparams  = self.nparams # (if mcmc: nparams will be updated)
+
+      if not self.unif == 1:
         nwalkers = int(3*ndim)
-        nsteps   = int(max(7500, self.nparams/nwalkers)) # (for safety we assume tau>100)
+        nsteps   = int(max(7500, nparams/nwalkers)) # (for safety we assume tau>100)
         burnin   = int(0.3*nsteps)                       # 30% burn-in
-        thin     = max(1,int(float((nsteps-burnin)*nwalkers)/self.nparams)-1)
+        thin     = max(1,int(0.8*float((nsteps-burnin)*nwalkers)/nparams))
         
         sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
                                         ndim = ndim, 
@@ -356,37 +359,41 @@ class dataset:
                                         log_prob_fn = self.__param_logpost)
         sampler.run_mcmc(initial_state = self.fiducial[np.newaxis] + 
                                          0.5*np.sqrt(np.diag(self.covmat))*
-                                         np.random.normal(size=(nwalkers, ndim)), 
+                                         np.random.normal(size=(nwalkers,ndim)), 
                          nsteps=nsteps, 
                          progress=False)
-
-        xf   = sampler.get_chain(flat = True, discard = burnin, thin = thin)
-        nparams = np.atleast_2d(xf).shape[0]
-        lnp  = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
+        
+        xf  = sampler.get_chain(flat = True, discard = burnin, thin = thin)
+        lnp = sampler.get_log_prob(flat = True, discard = burnin, thin = thin)
+        xf  = xf[:nparams,:]
+        lnp = np.atleast_2d(lnp[:nparams]).T
       else:
-        # TODO
-        lnp  = np.ones((nparams, 1), dtype=np.uint8)
+        xf  = np.random.uniform(low  = bds[:,0], 
+                                high = bds[:,1], 
+                                size = (nparams,ndim))
+        lnp = np.ones((nparams,1), dtype=np.uint8)
       
-      w    = np.ones((nparams, 1), dtype=np.uint8)
+      w = np.ones((nparams,1), dtype=np.uint8)
       chi2 = -2*lnp
-      
+
       if not loadedfromchk:
         # Output some debug messaging ------------------------------------------
-        try:
-          tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                       copy=True, 
-                       dtype=self.dtype).max()
-          print(f"Partial Result: tau = {tau}\n"
-                f"nwalkers={nwalkers}\n"
-                f"nsteps (per walker) = {nsteps}\n"
-                f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
-                f"nparams (after thin)={nparams}\n")
-        except Exception as e:
-          print(f"Partial Result: tau = N/A (emcee threw an exception)\n"
-                f"nwalkers={nwalkers}\n"
-                f"nsteps (per walker) = {nsteps}\n"
-                f"nparams (after thin)={nparams}\n")
-          tau = 1 # make sure main MPI worker does not crash over trivial check
+        if not self.unif == 1:
+          try:
+            tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
+                         copy=True, 
+                         dtype=self.dtype).max()
+            print(f"Partial Result: tau = {tau}\n"
+                  f"nwalkers={nwalkers}\n"
+                  f"nsteps (per walker) = {nsteps}\n"
+                  f"nsteps/tau = {nsteps/tau} (min should be ~50)\n"
+                  f"nparams (after thin)={nparams}\n")
+          except Exception as e:
+            print(f"Partial Result: tau = N/A (emcee threw an exception)\n"
+                  f"nwalkers={nwalkers}\n"
+                  f"nsteps (per walker) = {nsteps}\n"
+                  f"nparams (after thin)={nparams}\n")
+            tau = 1 # make sure main MPI worker does not crash over trivial check
         # save a range files ---------------------------------------------------
         hd = ["weights","lnp"] + names + ["chi2*"]
         rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
@@ -403,9 +410,12 @@ class dataset:
                    fmt="%s")
         # save chain begins ----------------------------------------------------
         fname = f"{self.paramsf}.1.txt";
-        hd=f"nwalkers={nwalkers}\n"
+        if not self.unif == 1:
+          hd=f"nwalkers={nwalkers}\n"
+        else:
+          hd=f"Uniform Sampling\n"
         np.savetxt(fname,
-                   np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1),
+                   np.concatenate([w, lnp, xf, chi2], axis=1),
                    fmt="%.9e",
                    header=hd + ' '.join(["weights", "lnp"] + names),
                    comments="# ")
@@ -422,7 +432,7 @@ class dataset:
         with open(fname, "a") as f: # append mode
           hd = f"nwalkers={nwalkers}\n" + ' '.join(["weights","lnp"]+names)
           np.savetxt(f, 
-                     np.concatenate([w, lnp[:,None], xf, chi2[:,None]], axis=1), 
+                     np.concatenate([w, lnp, xf, chi2], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
                      fmt = "%.9e")
         del w         # save RAM memory
@@ -431,6 +441,7 @@ class dataset:
         del chi2      # save RAM memory
         gc.collect()  # save RAM memory
         
+
         self.samples = np.atleast_2d(np.loadtxt(fname, dtype=self.dtype))[:,2:-1]
         if self.samples.ndim != 2:
           raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
@@ -807,32 +818,11 @@ class dataset:
             continue
     return
 
-
-
-
-#===================================================================================================
-# datavectors
-
-def generate_parameters(N, u_bound, l_bound, mode, parameters_file, save=True):
-    D = len(u_bound)
-    if mode=='train':
-        
-        N_LHS = int(0.05*N)
-        sampler = qmc.LatinHypercube(d=D)
-        sample = sampler.random(n=N_LHS)
-        sample_scaled = qmc.scale(sample, l_bound, u_bound)
-
-        N_uni = N-N_LHS
-        data = np.random.uniform(low=l_bound, high=u_bound, size=(N_uni, D))
-        samples = np.concatenate((sample_scaled, data), axis=0)
-    else:
-        samples = np.random.uniform(low=l_bound, high=u_bound, size=(N, D))
-
-    if save:
-        np.save(parameters_file, samples)
-        print('(Input Parameters) Saved!')
-    return samples
-
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+# main
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 
 
 if __name__ == '__main__':
