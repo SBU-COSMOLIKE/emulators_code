@@ -1,9 +1,8 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc, math
+import emcee, argparse, os, sys, yaml, time, traceback, psutil, gc, math
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
-from tqdm import tqdm
 from pathlib import Path
 from getdist import loadMCSamples
 from collections import deque
@@ -193,14 +192,14 @@ class dataset:
       raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
-    if self.nparams < 0:
+    if self.nparams <= 0:
       raise ValueError("--nparams must be positive integer")
     self.paramsf = None 
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
-      raise ValueError("--temp must be > 1")
+      raise ValueError("--temp must be => 1")
     self.unif = 0 if args.unif is None else args.unif
     #---------------------------------------------------------------------------
     # Load Cobaya model (needed for computing likelihood)
@@ -261,8 +260,9 @@ class dataset:
       outer = np.outer(sig, sig)
       corr  = covmat / outer 
       m = np.abs(corr - np.eye(n)).max()
-      corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
-      np.fill_diagonal(corr, 1.0)
+      if m > self.maxcorr:
+        corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
+        np.fill_diagonal(corr, 1.0)
       covmat = corr * outer
 
       #-------------------------------------------------------------------------
@@ -304,18 +304,6 @@ class dataset:
     self.setup = True
 
   #-----------------------------------------------------------------------------
-  # likelihood
-  #-----------------------------------------------------------------------------
-  def __param_logpost(self,x):
-    y = x - self.fiducial
-    logprior = self.model.prior.logp(x)
-    if math.isinf(logprior):
-      return -np.inf 
-    else:
-      logp = (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
-      return logp
-
-  #-----------------------------------------------------------------------------
   # save/load checkpoint
   #-----------------------------------------------------------------------------
   def __load_chk(self):
@@ -333,7 +321,8 @@ class dataset:
         if self.samples.ndim != 2:
           raise ValueError(f"samples must be 2D, got {self.samples.shape}") 
         
-        self.failed = np.loadtxt(f"{self.failf}.txt", dtype=np.uint8)
+        self.failed = np.atleast_1d(np.loadtxt(f"{self.failf}.txt", 
+                                               dtype=np.uint8))
         self.failed = np.asarray(self.failed).astype(bool)
         if self.failed.ndim != 1:
           raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
@@ -351,8 +340,8 @@ class dataset:
           self.datavectors = np.load(f"{self.dvsf}.npy", allow_pickle=False)
           self.dvs_is_memmap = False
         else:
-          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
-                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
+                f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                 f"We will read dvs from HD (slow)")
           self.datavectors = np.load(f"{self.dvsf}.npy", 
                                      mmap_mode="r+", 
@@ -364,7 +353,7 @@ class dataset:
         if self.datavectors.ndim != 2:
           raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
-          raise ValueError(f"Incompatible samples/datavectir chk files")
+          raise ValueError(f"Incompatible samples/datavector chk files")
         if loadchk: 
           print("Loaded models from chk")
           if self.append == 0:
@@ -381,6 +370,23 @@ class dataset:
       os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
     np.savetxt(f"{self.failf}.tmp.txt", self.failed.astype(np.uint8), fmt="%d")
     os.replace(f"{self.failf}.tmp.txt", f"{self.failf}.txt")
+
+  #-----------------------------------------------------------------------------
+  # likelihood
+  #-----------------------------------------------------------------------------
+  def __param_logpost(self,x):
+    y = x - self.fiducial
+    ## begin: reoder idx from ORD keyword ordering to YAML param block ordering 
+    pidx = {p : i for i, p in enumerate(self.sampled_params)}
+    names = list(self.model.parameterization.sampled_params().keys())
+    idx = np.array([pidx[p] for p in names], copy=True, dtype=int)
+    # end reordering idx -------------------------------
+    logprior = self.model.prior.logp(x[idx])
+    if math.isinf(logprior):
+      return -np.inf 
+    else:
+      logp = (-0.5*(y @ self.inv_covmat @ y) + logprior)/self.temp
+      return logp
 
   #-----------------------------------------------------------------------------
   # run mcmc
@@ -424,9 +430,8 @@ class dataset:
         xf  = np.random.uniform(low  = bds[:,0], 
                                 high = bds[:,1], 
                                 size = (nparams,ndim))
-        lnp = np.ones((nparams,1), dtype=np.uint8)
-      
-      w = np.ones((nparams,1), dtype=np.uint8)
+        lnp = np.ones((nparams,1), dtype=self.dtype)
+      w = np.ones((nparams,1), dtype=self.dtype)
       chi2 = -2*lnp
 
       if not loadedfromchk:
@@ -447,20 +452,14 @@ class dataset:
                   f"nsteps (per walker) = {nsteps}\n"
                   f"nparams (after thin)={nparams}\n")
             tau = 1 # make sure main MPI worker does not crash over trivial check
+        
         # save a range files ---------------------------------------------------
-        hd = ["weights","lnp"] + names + ["chi2*"]
+        hd = ["weights","lnp"] + names
         rows = [(str(n),float(l),float(h)) for n,l,h in zip(names,bds[:,0],bds[:,1])]
         with open(f"{self.paramsf}.ranges", "w") as f: 
           f.write(f"# {' '.join(hd)}\n")
           f.writelines(f"{n} {l:.5e} {h:.5e}\n" for n, l, h in rows)
-        # save paramname files -------------------------------------------------
-        param_info = self.model.info()['params']
-        latex  = [param_info[x]['latex'] for x in names]
-        names.append("chi2*")
-        latex.append("\\chi^2")
-        np.savetxt(f"{self.paramsf}.paramnames", 
-                   np.column_stack((names,latex)),
-                   fmt="%s")
+                
         # save chain begins ----------------------------------------------------
         fname = f"{self.paramsf}.1.txt";
         if not self.unif == 1:
@@ -470,10 +469,32 @@ class dataset:
         np.savetxt(fname,
                    np.concatenate([w, lnp, xf, chi2], axis=1),
                    fmt="%.9e",
-                   header=hd + ' '.join(["weights", "lnp"] + names),
+                   header=hd + ' '.join(["weights", "lnp"] + names + ["chi2*"]),
                    comments="# ")
+        
         # copy samples to self.samples  ----------------------------------------
         self.samples = np.array(xf, copy=True, dtype=self.dtype)
+
+        # save a cov matrix ------------------------------------------------------
+        np.savetxt(f"{self.paramsf}.covmat",
+                   np.array(loadMCSamples(f"{self.paramsf}", 
+                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
+                            copy=True, 
+                            dtype=self.dtype),
+                   fmt="%.9e",
+                   header=' '.join(names),
+                   comments="# ")
+
+        # save paramname files -------------------------------------------------
+        param_info = self.model.info()['params']
+        latex  = [param_info[x]['latex'] for x in names]
+        names.append("chi2*")
+        latex.append("\\chi^2")
+        np.savetxt(f"{self.paramsf}.paramnames", 
+                   np.column_stack((names,latex)),
+                   fmt="%s")
+
+        # delete arrays (save RAM) ---------------------------------------------
         del w         # save RAM memory
         del xf        # save RAM memory
         del lnp       # save RAM memory
@@ -483,7 +504,7 @@ class dataset:
         # append chain file begins ---------------------------------------------
         fname = f"{self.paramsf}.1.txt";
         with open(fname, "a") as f: # append mode
-          hd = f"nwalkers={nwalkers}\n" + ' '.join(["weights","lnp"]+names)
+          hd = ' '.join(["weights","lnp"] + names)
           np.savetxt(f, 
                      np.concatenate([w, lnp, xf, chi2], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
@@ -505,7 +526,7 @@ class dataset:
         with open(fname, "a") as f: # append mode
           np.savetxt(f, failed.astype(np.uint8), fmt="%d")
 
-        self.failed = np.loadtxt(fname, dtype=np.uint8)
+        self.failed = np.atleast_1d(np.loadtxt(fname, dtype=np.uint8))
         self.failed = np.asarray(self.failed).astype(bool)
         if self.failed.ndim != 1:
           raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
@@ -528,8 +549,8 @@ class dataset:
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
           self.dvs_is_memmap = False
         else:
-          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
-                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
+                f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                 f"We will read dvs from HD (slow)")
           datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
                                     mode="w+",
@@ -553,17 +574,21 @@ class dataset:
         # check final dimensions -----------------------------------------------
         if self.datavectors.shape[0] != self.samples.shape[0]:
           raise ValueError(f"Incompatible samples/datavectir chk files")
-        
+
+        # update a parameter cov matrix ----------------------------------------
+        np.savetxt(f"{self.paramsf}.covmat",
+                   np.array(loadMCSamples(f"{self.paramsf}", 
+                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
+                            copy=True, 
+                            dtype=self.dtype),
+                   fmt="%.9e",
+                   header=' '.join(names),
+                   comments="# ")
+
         # set  self.loadedfromchk ----------------------------------------------
         self.loadedfromchk = True
 
-      # save a cov matrix ------------------------------------------------------
-      samples = loadMCSamples(f"{self.paramsf}", settings={'ignore_rows': u'0.'})
-      np.savetxt(f"{self.paramsf}.covmat",
-                 np.array(samples.cov(), copy=True, dtype=self.dtype),
-                 fmt="%.9e",
-                 header=' '.join(names),
-                 comments="# ")
+
     # set self.loadedsamples ---------------------------------------------------
     self.loadedsamples = True
   
@@ -629,8 +654,8 @@ class dataset:
           self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
           self.dvs_is_memmap = False
         else:
-          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
-                f"There is {RAMavail/1e9:.2f} GB of RAM available."
+          print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
+                f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                 f"We will read dvs from HD (slow)")
           self.datavectors = open_memmap(f"{self.dvsf}.npy", 
                                        mode="w+",
@@ -673,7 +698,7 @@ class dataset:
         next_block = 1 
         too_frequent = True
         nparams = len(self.samples)   
-        completed = np.zeros(nparams, dtype=np.uint8)
+        completed = np.zeros(nparams, dtype=bool)
 
         if not self.loadedfromchk:
           self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
@@ -697,8 +722,8 @@ class dataset:
             self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
             self.dvs_is_memmap = False
           else:
-            print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM."
-                  f"There is {RAMavail/1e9:.2f} GB of RAM available."
+            print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
+                  f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                   f"We will read dvs from HD (slow)")
             self.datavectors = open_memmap(f"{self.dvsf}.npy", 
                                          mode="w+",
