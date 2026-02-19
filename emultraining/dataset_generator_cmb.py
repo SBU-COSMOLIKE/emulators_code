@@ -474,7 +474,7 @@ class dataset:
         with open(fname, "a") as f: # append mode
           np.savetxt(f, failed.astype(np.uint8), fmt="%d")
 
-        self.failed = np.loadtxt(fname, dtype=np.uint8)
+        self.failed = np.atleast_1d(np.loadtxt(fname, dtype=np.uint8))
         self.failed = np.asarray(self.failed).astype(bool)
         if self.failed.ndim != 1:
           raise ValueError(f"failed must be 1D, got {self.failed.shape}") 
