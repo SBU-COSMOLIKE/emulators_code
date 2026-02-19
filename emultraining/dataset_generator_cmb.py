@@ -58,9 +58,9 @@ parser.add_argument("--nparams",
                     required=True)
 parser.add_argument("--mode",
                     dest="mode",
-                    help="Which CMB data vector",
+                    help="Which CMB data vector (ul prefix = unlensed)",
                     type=str,
-                    choices=["tt","te","ee","pp"])
+                    choices=["lensed","unlensed"])
 parser.add_argument("--unif",
                     dest="unif",
                     help="Choose Between Uniform and Fisher based samples",
@@ -127,6 +127,7 @@ class dataset:
     self.covmat = None 
     self.dtype = np.float32
     self.dvsf = None 
+    self.derived = None
     self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
     if self.freqchk < 500:
@@ -138,6 +139,7 @@ class dataset:
     self.loadchk = 0 if args.loadchk is None else args.loadchk 
     self.loadedfromchk = False  # check if loaded from checkpoint sucessfully
     self.loadedsamples = False  # check loaded samples sucessfully
+    self.lrange = np.array([0,5000],dtype=int)
     self.maxcorr = 0.15 if args.maxcorr is None else args.maxcorr
     if not (0.01 < self.maxcorr <= 1):
       raise ValueError("--maxcorr must be between (0.01,1]")
@@ -146,34 +148,65 @@ class dataset:
     if self.nparams < 0:
       raise ValueError("--nparams must be positive integer")
     self.paramsf = None 
-    self.probe = "tt" if args.probe is None else args.probe
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
       raise ValueError("--temp must be > 1")
     self.unif = 0 if args.unif is None else args.unif
-    #---------------------------------------------------------------------------
-    # Load Cobaya model (needed for computing likelihood)
-    #---------------------------------------------------------------------------
-    info = yaml_load(f"{fileroot}/{args.yaml}")
-    self.model = get_model(info)
+    self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"   
+    if not os.path.isfile(f"{self.yaml}"):
+      raise FileNotFoundError(f"YAML file not found: {self.yaml}")
+    
     
     #---------------------------------------------------------------------------
-    # Load yaml again (for reading options)
+    # Load yaml
     #---------------------------------------------------------------------------
-    with open(f"{fileroot}/{args.yaml}", 'r') as stream:
-      yamlopts = yaml.safe_load(stream)
+    with open(self.yaml, 'r') as stream:
+      info = yaml.safe_load(stream)
     
-    # preferred ordering of params
-    self.sampled_params = yamlopts['train_args']['ord'][0]
+    if info is None:
+      raise ValueError(f"YAML file is empty or invalid: {self.yaml}")
+    
+    if not isinstance(info, dict):
+      raise ValueError(f"Cobaya YAML did not parse to a dict: {self.yaml}")
+    
+    missing = [k for k in ['params', 'likelihood', 'train_args'] if k not in info]
+    if missing:
+      raise KeyError(f"Cobaya YAML missing required blocks {missing}: {self.yaml}") 
 
+    train_args = info["train_args"]
+    required_keys = ['ord', 'lrange', 'derived']
     if not self.unif == 1:
-      # load fiducial data vector
-      fid = yamlopts["train_args"]["fiducial"]
+      required_keys += ['fiducial', 'params_covmat_file']
+
+    missing = [k for k in required_keys if k not in train_args]
+    if missing:
+      raise KeyError(f"Cobaya YAML missing required keys {missing}: {self.yaml}")
+
+    #---------------------------------------------------------------------------
+    # Load Cobaya model (needed for computing likelihood), cov matrix...
+    #--------------------------------------------------------------------------- 
+    try:
+      self.model = get_model(info)
+    except Exception as e:
+      raise RuntimeError(f"get_model failed for {self.yaml}: {e}") from e
+
+    self.probe = train_args['probe']
+    if self.probe not in ("lensed", "unlensed"):
+      raise ValueError(f"Invalid Probe: {self.probe}")
+
+    self.sampled_params = train_args['ord'] # preferred ordering of params
+
+    self.derived = train_args['derived']
+
+    self.lrange = train_args['lrange'][0]
+    
+    if not self.unif == 1:
+      fid = train_args["fiducial"] # load fiducial data vector
       
-      # load cov param matrix
-      raw_covmat_file = yamlopts["train_args"]["params_covmat_file"]
+      # load cov param matrix --------------------------------------------------
+      raw_covmat_file = train_args["params_covmat_file"]
       with open(f"{fileroot}/{raw_covmat_file}") as f:
         raw_covmat_params_names = np.array(f.readline().split()[1:])
         raw_covmat = np.loadtxt(f) 
@@ -181,11 +214,11 @@ class dataset:
       #-------------------------------------------------------------------------
       # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
       #-------------------------------------------------------------------------
-      # Reorder fiducial
+      # Reorder fiducial -------------------------------------------------------
       self.fiducial = np.array([fid[p] for p in self.sampled_params], 
                                copy=True, dtype=self.dtype)
 
-      # Reorder covmat
+      # Reorder covmat ---------------------------------------------------------
       pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
       try:
         idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
@@ -193,7 +226,7 @@ class dataset:
         raise ValueError(f"{e.args[0]!r} not found in cov header") from None
       covmat = raw_covmat[np.ix_(idx, idx)]
       
-    # Reorder bounds
+    # Reorder bounds -----------------------------------------------------------
     names = list(self.model.parameterization.sampled_params().keys())
     pidx = {p : i for i, p in enumerate(names)}
     idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
@@ -424,14 +457,15 @@ class dataset:
         self.samples = np.array(xf, copy=True, dtype=self.dtype)
 
         # save a cov matrix ------------------------------------------------------
-        np.savetxt(f"{self.paramsf}.covmat",
-                   np.array(loadMCSamples(f"{self.paramsf}", 
-                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
-                            copy=True, 
-                            dtype=self.dtype),
-                   fmt="%.9e",
-                   header=' '.join(names),
-                   comments="# ")
+        with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
+          np.savetxt(f"{self.paramsf}.covmat",
+                     np.array(loadMCSamples(f"{self.paramsf}", 
+                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                              copy=True, 
+                              dtype=self.dtype),
+                     fmt="%.9e",
+                     header=' '.join(names),
+                     comments="# ")
 
         # save paramname files -------------------------------------------------
         param_info = self.model.info()['params']
@@ -483,16 +517,16 @@ class dataset:
           raise ValueError(f"Incompatible samples/failed chk files")
 
         # Expand dvs begins ----------------------------------------------------
-        nrows = self.datavectors.shape[0]
-        ncols = self.datavectors.shape[1]
- 
+        nrows   = self.datavectors.shape[0]
+        ncols   = self.datavectors.shape[1]
+        nstride = self.datavectors.shape[2]
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
                     self.datavectors.nbytes + 
-                    (nrows + nparams)*ncols*self.datavectors.dtype.itemsize)
+                    (nrows+nparams)*ncols*nstride*self.datavectors.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
           self.datavectors = np.vstack((self.datavectors, 
-                                        np.zeros((nparams,ncols),dtype=self.dtype)))
+                                        np.zeros((nparams,ncols,nstride),dtype=self.dtype)))
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
           self.dvs_is_memmap = False
@@ -524,14 +558,15 @@ class dataset:
           raise ValueError(f"Incompatible samples/datavectir chk files")
 
         # update a parameter cov matrix ----------------------------------------
-        np.savetxt(f"{self.paramsf}.covmat",
-                   np.array(loadMCSamples(f"{self.paramsf}", 
-                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
-                            copy=True, 
-                            dtype=self.dtype),
-                   fmt="%.9e",
-                   header=' '.join(names),
-                   comments="# ")
+        with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
+          np.savetxt(f"{self.paramsf}.covmat",
+                     np.array(loadMCSamples(f"{self.paramsf}", 
+                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                              copy=True, 
+                              dtype=self.dtype),
+                     fmt="%.9e",
+                     header=' '.join(names),
+                     comments="# ")
 
         # set  self.loadedfromchk ----------------------------------------------
         self.loadedfromchk = True
@@ -549,8 +584,10 @@ class dataset:
     )
     self.model.provider.set_current_input_params(param)
     
-    likelihood = self.model.likelihood[list(self.model.likelihood.keys())[0]]
-
+    nrows = (self.lrange[1] - self.lrange[0]) + 1
+    ncols = 5
+    out = np.zeros((nrows, ncols), dtype=self.dtype)
+    
     for (x, _), z in zip(self.model._component_order.items(),
                          self.model._params_of_dependencies):
         x.check_cache_and_compute(
@@ -559,9 +596,27 @@ class dataset:
             dependency_params=[param[p] for p in z],
             cached=False
         )
-    return np.array(likelihood.get_datavector(**param), 
-                    copy=True, 
-                    dtype=self.dtype)
+        if self.probe == "lensed" and (hasattr(x,'get_Cl') and 
+                                       callable(getattr(x,'get_Cl'))):
+          cmb = x.get_Cl()
+          out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
+          out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
+          out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
+          out[:,3] = cmb["pp"][self.lrange[0]:self.lrange[1]+1]
+        elif self.probe == "unlensed" and (hasattr(x,'get_unlensed_Cl') and 
+                                           callable(getattr(x,'get_unlensed_Cl'))):
+          cmb = x.get_unlensed_Cl()
+          out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
+          out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
+          out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
+          out[:,3] = 0.0
+        elif hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
+          for i, p in enumerate(self.derived):
+            try:
+              out[i,4] = x.get_param(p)
+            except Exception:
+              pass
+    return out
 
   def __generate_datavectors(self):
     if not self.setup:
@@ -586,20 +641,16 @@ class dataset:
       if not self.loadedfromchk:
         self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
         self.failed = np.asarray(self.failed).astype(bool)
-        
-        try: # First run: get data vector size
-          dvs = self._compute_dvs_from_sample(self.samples[0])
-        except Exception:
-          raise RuntimeError(f"Failed in _compute_dvs_from_sample\n" 
-                             f"Cannot determine datavector length.")
-        nrows = nparams
-        ncols = len(dvs)
         # Allocate dvs begins --------------------------------------------------
+        nrows   = nparams
+        ncols   = self.lrange+1
+        nstride = 5 # TT, TE, EE, PHIPHI, EXTRA (waste a lot of RAM but simple)
+        
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
-                    nrows*ncols*dvs.dtype.itemsize)
+                    nrows*ncols*nstride*dvs.dtype.itemsize )
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
-          self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
+          self.datavectors = np.zeros((nrows, ncols, nstride), dtype=self.dtype)
           self.dvs_is_memmap = False
         else:
           print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
@@ -607,15 +658,13 @@ class dataset:
                 f"We will read dvs from HD (slow)")
           self.datavectors = open_memmap(f"{self.dvsf}.npy", 
                                        mode="w+",
-                                       shape=(nrows, ncols),
+                                       shape=(nrows, ncols, nstride),
                                        dtype=self.dtype)
-          self.datavectors[:] = 0.0
+          self.datavectors[::] = 0.0
           self.datavectors.flush()
           self.dvs_is_memmap = True
         # Allocate dvs end -----------------------------------------------------
-        self.datavectors[0] = dvs
-        self.failed[0] = False
-        idx = np.arange(1, nparams)
+        idx = np.arange(0, nparams)
       else:
         idx = np.where(self.failed == True)[0] 
 
@@ -625,11 +674,11 @@ class dataset:
           self.failed[i] = False
         except Exception: # set datavector to zero and continue
           self.failed[i] = True
-          self.datavectors[i,:] = 0.0
+          self.datavectors[i,:,:] = 0.0
           sys.stderr.write(f"[Rank 0] Worker 0 failed at i={i}\n")
           sys.stderr.flush()
           continue
-        self.datavectors[i] = dvs
+        self.datavectors[i,:,:] = dvs[:,:]
 
         if i % self.freqchk == 0:
           print(f"Model number: {i+1} (total: {nparams}) - checkpoint", flush=True)
@@ -651,23 +700,16 @@ class dataset:
         if not self.loadedfromchk:
           self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
           self.failed = np.asarray(self.failed).astype(bool)
-
-          try: # First run: get data vector size
-            dvs = self._compute_dvs_from_sample(self.samples[0])
-          except Exception:
-            sys.stderr.write(f"Failed in _compute_dvs_from_sample for idx=0\n" 
-                             f"Cannot determine datavector length\n"
-                             f"aborting MPI job\n")
-            sys.stderr.flush()
-            comm.Abort(1)
-          nrows = nparams
-          ncols = len(dvs)
           # Allocate dvs begins ------------------------------------------------
+          nrows = nparams
+          ncols = ncols = self.lrange+1
+          nstride = 5 # TT, TE, EE, PHIPHI, EXTRA (waste a lot of RAM but simple)
+
           RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
-                      nrows*ncols*dvs.dtype.itemsize)
+                      nrows*ncols*nstride*dvs.dtype.itemsize)
           RAMavail = psutil.virtual_memory().available
           if RAMneed < 0.75 * RAMavail:
-            self.datavectors = np.zeros((nrows, ncols), dtype=self.dtype)
+            self.datavectors = np.zeros((nrows, ncols, nstride), dtype=self.dtype)
             self.dvs_is_memmap = False
           else:
             print(f"Warning: samples & dvs need {RAMneed/1e9:.2f} GB of RAM. "
@@ -675,16 +717,13 @@ class dataset:
                   f"We will read dvs from HD (slow)")
             self.datavectors = open_memmap(f"{self.dvsf}.npy", 
                                          mode="w+",
-                                         shape=(nrows, ncols),
+                                         shape=(nrows, ncols, nstride),
                                          dtype=self.dtype)
-            self.datavectors[:] = 0.0
+            self.datavectors[::] = 0.0
             self.datavectors.flush()
             self.dvs_is_memmap = True
           # Allocate dvs end ---------------------------------------------------
-          self.datavectors[0] = dvs
-          self.failed[0] = False
-          completed[0] = True
-          idx0 = np.arange(1, nparams)
+          idx0 = np.arange(0, nparams)
         else:
           completed = ~self.failed
           idx0 = np.where(self.failed == True)[0]
@@ -692,18 +731,21 @@ class dataset:
         tasks   = deque(idx0.tolist())
         nactive = min(nworkers, len(tasks))
         active  = {} # Dict: key = worker (src), value: (idx, t_start)
-        for w in range(1, nactive+1):
+        
+        # Start MPI workers ----------------------------------------------------
+        for w in range(0, nactive+1): 
           j = tasks.popleft() 
           comm.send((j, self.samples[j]), dest = w, tag = TTAG)
           active[w] = (j, MPI.Wtime())
 
+        # Send all tasks to active MPI workers ---------------------------------
         count  = 0
         while tasks:
           # comm.Iprobe = non-blocking operation used to check for an incoming 
           #               message without actually receiving it
           # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
-            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
+            kind, idx, payload = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RTAG,
                                        status = status)
             count += 1
@@ -712,13 +754,13 @@ class dataset:
               del active[src]
             
             if kind == "err": # set datavector to zero and continue
-              self.datavectors[idx,:] = 0.0
+              self.datavectors[idx,:,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {dvs}\n")
+                               f"Reason: {payload}\n")
               sys.stderr.flush() 
             else:
-              self.datavectors[idx] = dvs 
+              self.datavectors[idx,:,:] = payload[:,:] 
               self.failed[idx] = False
             completed[idx] = True
 
@@ -751,7 +793,7 @@ class dataset:
                 doabort = True
             if doabort:
               for w, (idx, t0) in list(active.items()): # mark all running tasks as failed
-                self.datavectors[idx,:] = 0.0
+                self.datavectors[idx,:,:] = 0.0
                 self.failed[idx] = True
                 completed[idx] = True
               self.__save_chk() # save before crashing
@@ -759,24 +801,24 @@ class dataset:
             time.sleep(.1) # avoid 100% CPU usage
         # end of while loop  
 
-        # drain active workers ------------------------------------------------
+        # drain last tasks from active MPI workers -----------------------------
         while active: 
           # comm.Iprobe = non-blocking operation used to check for an incoming 
           #               message without actually receiving it
           # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
-            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
-                                       tag = RTAG, 
-                                       status = status) # drain results 
+            kind, idx, payload = comm.recv(source = MPI.ANY_SOURCE, 
+                                           tag = RTAG, 
+                                           status = status) # drain results 
             src = status.Get_source()
             if kind == "err":
-              self.datavectors[idx,:] = 0.0
+              self.datavectors[idx,:,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {dvs}\n")
+                               f"Reason: {payload}\n")
               sys.stderr.flush()
             else:
-              self.datavectors[idx] = dvs 
+              self.datavectors[idx,:,:] = payload[:,:]
               self.failed[idx] = False
             completed[idx] = True
             if src in active: # Remove worker from active list
@@ -790,7 +832,7 @@ class dataset:
                 doabort = True
             if doabort:
               for w, (idx, t0) in list(active.items()): # mark all running tasks as failed
-                self.datavectors[idx,:] = 0.0
+                self.datavectors[idx,:,:] = 0.0
                 self.failed[idx] = True
                 completed[idx] = True
               self.__save_chk() # save before crashing

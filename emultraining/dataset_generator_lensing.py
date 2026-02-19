@@ -7,6 +7,7 @@ from pathlib import Path
 from getdist import loadMCSamples
 from collections import deque
 from numpy.lib.format import open_memmap
+import contextlib, io
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Example how to run this program
@@ -201,36 +202,58 @@ class dataset:
     if self.temp < 1:
       raise ValueError("--temp must be => 1")
     self.unif = 0 if args.unif is None else args.unif
-    #---------------------------------------------------------------------------
-    # Load Cobaya model (needed for computing likelihood)
-    #---------------------------------------------------------------------------
-    info = yaml_load(f"{fileroot}/{args.yaml}")
-    self.model = get_model(info)
+    self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"
     
     #---------------------------------------------------------------------------
-    # Load yaml again (for reading options)
+    # Load yaml
     #---------------------------------------------------------------------------
-    with open(f"{fileroot}/{args.yaml}", 'r') as stream:
-      yamlopts = yaml.safe_load(stream)
+    with open(self.yaml, 'r') as stream:
+      info = yaml.safe_load(stream)
     
+    if info is None:
+      raise ValueError(f"YAML file is empty or invalid: {self.yaml}")
+    
+    if not isinstance(info, dict):
+      raise ValueError(f"Cobaya YAML did not parse to a dict: {self.yaml}")
+    
+    missing = [k for k in ['params', 'likelihood', 'train_args'] if k not in info]
+    if missing:
+      raise KeyError(f"Cobaya YAML missing required blocks {missing}: {self.yaml}") 
+
+    train_args = info["train_args"]
+    required_keys = ['ord', 'probe']
+    if not self.unif == 1:
+      required_keys += ['fiducial', 'params_covmat_file']
+
+    missing = [k for k in required_keys if k not in train_args]
+    if missing:
+      raise KeyError(f"Cobaya YAML missing required keys {missing}: {self.yaml}")
+
+    #---------------------------------------------------------------------------
+    # Load Cobaya model (needed for computing likelihood), cov matrix...
+    #---------------------------------------------------------------------------    
+    try:
+      self.model = get_model(info)
+    except Exception as e:
+      raise RuntimeError(f"get_model failed for {self.yaml}: {e}") from e
+
     # preferred ordering of params
-    self.sampled_params = yamlopts['train_args']['ord'][0]
+    self.sampled_params = train_args['ord'][0]
 
     # load probe suffix
-    probe = yamlopts["train_args"]["probe"]
+    probe = train_args["probe"]
 
     if not self.unif == 1:
-      # load fiducial data vector
-      fid = yamlopts["train_args"]["fiducial"]
+      fid = train_args["fiducial"] # load fiducial data vector
       
       # load cov param matrix
-      raw_covmat_file = yamlopts["train_args"]["params_covmat_file"]
+      raw_covmat_file = train_args["params_covmat_file"]
       with open(f"{fileroot}/{raw_covmat_file}") as f:
         raw_covmat_params_names = np.array(f.readline().split()[1:])
         raw_covmat = np.loadtxt(f) 
       
       #-------------------------------------------------------------------------
-      # Reorder fiducial, bounds and covmat to follow ['train_args']['ord']
+      # Reorder fiducial, bounds and covmat to follow train_args['ord']
       #-------------------------------------------------------------------------
       # Reorder fiducial
       self.fiducial = np.array([fid[p] for p in self.sampled_params], 
@@ -476,14 +499,15 @@ class dataset:
         self.samples = np.array(xf, copy=True, dtype=self.dtype)
 
         # save a cov matrix ------------------------------------------------------
-        np.savetxt(f"{self.paramsf}.covmat",
-                   np.array(loadMCSamples(f"{self.paramsf}", 
-                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
-                            copy=True, 
-                            dtype=self.dtype),
-                   fmt="%.9e",
-                   header=' '.join(names),
-                   comments="# ")
+        with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
+          np.savetxt(f"{self.paramsf}.covmat",
+                     np.array(loadMCSamples(f"{self.paramsf}", 
+                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                              copy=True, 
+                              dtype=self.dtype),
+                     fmt="%.9e",
+                     header=' '.join(names),
+                     comments="# ")
 
         # save paramname files -------------------------------------------------
         param_info = self.model.info()['params']
@@ -576,14 +600,15 @@ class dataset:
           raise ValueError(f"Incompatible samples/datavectir chk files")
 
         # update a parameter cov matrix ----------------------------------------
-        np.savetxt(f"{self.paramsf}.covmat",
-                   np.array(loadMCSamples(f"{self.paramsf}", 
-                                          settings={'ignore_rows': u'0.'}).cov(pars=names), 
-                            copy=True, 
-                            dtype=self.dtype),
-                   fmt="%.9e",
-                   header=' '.join(names),
-                   comments="# ")
+        with contextlib.redirect_stdout(io.StringIO()):
+          np.savetxt(f"{self.paramsf}.covmat",
+                     np.array(loadMCSamples(f"{self.paramsf}", 
+                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                              copy=True, 
+                              dtype=self.dtype),
+                     fmt="%.9e",
+                     header=' '.join(names),
+                     comments="# ")
 
         # set  self.loadedfromchk ----------------------------------------------
         self.loadedfromchk = True
@@ -658,9 +683,9 @@ class dataset:
                 f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                 f"We will read dvs from HD (slow)")
           self.datavectors = open_memmap(f"{self.dvsf}.npy", 
-                                       mode="w+",
-                                       shape=(nrows, ncols),
-                                       dtype=self.dtype)
+                                         mode="w+",
+                                         shape=(nrows, ncols),
+                                         dtype=self.dtype)
           self.datavectors[:] = 0.0
           self.datavectors.flush()
           self.dvs_is_memmap = True
@@ -744,11 +769,14 @@ class dataset:
         tasks   = deque(idx0.tolist())
         nactive = min(nworkers, len(tasks))
         active  = {} # Dict: key = worker (src), value: (idx, t_start)
+        
+        # Start MPI workers ----------------------------------------------------
         for w in range(1, nactive+1):
           j = tasks.popleft() 
           comm.send((j, self.samples[j]), dest = w, tag = TTAG)
           active[w] = (j, MPI.Wtime())
 
+        # Send tasks to active MPI workers -------------------------------------
         count  = 0
         while tasks:
           # comm.Iprobe = non-blocking operation used to check for an incoming 
@@ -811,7 +839,7 @@ class dataset:
             time.sleep(.1) # avoid 100% CPU usage
         # end of while loop  
 
-        # drain active workers ------------------------------------------------
+        # drain last tasks from active MPI workers -----------------------------
         while active: 
           # comm.Iprobe = non-blocking operation used to check for an incoming 
           #               message without actually receiving it
