@@ -196,6 +196,7 @@ class dataset:
     if self.nparams <= 0:
       raise ValueError("--nparams must be positive integer")
     self.paramsf = None 
+    self.probe = None
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
@@ -203,7 +204,8 @@ class dataset:
       raise ValueError("--temp must be => 1")
     self.unif = 0 if args.unif is None else args.unif
     self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"
-    
+    if not os.path.isfile(f"{self.yaml}"):
+      raise FileNotFoundError(f"YAML file not found: {self.yaml}")    
     #---------------------------------------------------------------------------
     # Load yaml
     #---------------------------------------------------------------------------
@@ -241,7 +243,7 @@ class dataset:
     self.sampled_params = train_args['ord'][0]
 
     # load probe suffix
-    probe = train_args["probe"]
+    self.probe = train_args["probe"]
 
     if not self.unif == 1:
       fid = train_args["fiducial"] # load fiducial data vector
@@ -313,13 +315,13 @@ class dataset:
     paramfile = Path(args.paramfile).stem
     failfile = Path(args.failfile).stem
     if not self.unif == 1:
-      self.dvsf = f"{root}/chains/{datavsfile}_{probe}_{self.temp}"
-      self.paramsf = f"{root}/chains/{paramfile}_{probe}_{self.temp}"
-      self.failf = f"{root}/chains/{failfile}_{probe}_{self.temp}"
+      self.dvsf = f"{root}/chains/{datavsfile}_{self.probe}_{self.temp}"
+      self.paramsf = f"{root}/chains/{paramfile}_{self.probe}_{self.temp}"
+      self.failf = f"{root}/chains/{failfile}_{self.probe}_{self.temp}"
     else:
-      self.dvsf = f"{root}/chains/{datavsfile}_{probe}_unifs"
-      self.paramsf = f"{root}/chains/{paramfile}_{probe}_unifs"
-      self.failf = f"{root}/chains/{failfile}_{probe}_unifs"
+      self.dvsf = f"{root}/chains/{datavsfile}_{self.probe}_unifs"
+      self.paramsf = f"{root}/chains/{paramfile}_{self.probe}_unifs"
+      self.failf = f"{root}/chains/{failfile}_{self.probe}_unifs"
     
     #---------------------------------------------------------------------------
     # Setup Done
@@ -502,7 +504,7 @@ class dataset:
         with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
           np.savetxt(f"{self.paramsf}.covmat",
                      np.array(loadMCSamples(f"{self.paramsf}", 
-                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                                            settings={'ignore_rows': u'0.'}).cov(pars=names), 
                               copy=True, 
                               dtype=self.dtype),
                      fmt="%.9e",
@@ -528,7 +530,7 @@ class dataset:
         # append chain file begins ---------------------------------------------
         fname = f"{self.paramsf}.1.txt";
         with open(fname, "a") as f: # append mode
-          hd = ' '.join(["weights","lnp"] + names)
+          hd = ' '.join(["weights","lnp"] + names + ["chi2*"])
           np.savetxt(f, 
                      np.concatenate([w, lnp, xf, chi2], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
@@ -597,13 +599,13 @@ class dataset:
         
         # check final dimensions -----------------------------------------------
         if self.datavectors.shape[0] != self.samples.shape[0]:
-          raise ValueError(f"Incompatible samples/datavectir chk files")
+          raise ValueError(f"Incompatible samples/datavector chk files")
 
         # update a parameter cov matrix ----------------------------------------
         with contextlib.redirect_stdout(io.StringIO()):
           np.savetxt(f"{self.paramsf}.covmat",
                      np.array(loadMCSamples(f"{self.paramsf}", 
-                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                                            settings={'ignore_rows': u'0.'}).cov(pars=names), 
                               copy=True, 
                               dtype=self.dtype),
                      fmt="%.9e",
@@ -783,7 +785,7 @@ class dataset:
           #               message without actually receiving it
           # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
-            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE,
+            kind, idx, payload = comm.recv(source = MPI.ANY_SOURCE,
                                        tag = RTAG,
                                        status = status)
             count += 1
@@ -795,10 +797,10 @@ class dataset:
               self.datavectors[idx,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {dvs}\n")
+                               f"Reason: {payload}\n")
               sys.stderr.flush() 
             else:
-              self.datavectors[idx] = dvs 
+              self.datavectors[idx] = payload 
               self.failed[idx] = False
             completed[idx] = True
 
@@ -845,7 +847,7 @@ class dataset:
           #               message without actually receiving it
           # Why? protect the script against crashes (like CAMB/Class crash)
           if comm.Iprobe(source = MPI.ANY_SOURCE, tag = RTAG, status = status):
-            kind, idx, dvs = comm.recv(source = MPI.ANY_SOURCE, 
+            kind, idx, payload = comm.recv(source = MPI.ANY_SOURCE, 
                                        tag = RTAG, 
                                        status = status) # drain results 
             src = status.Get_source()
@@ -853,10 +855,10 @@ class dataset:
               self.datavectors[idx,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {dvs}\n")
+                               f"Reason: {payload}\n")
               sys.stderr.flush()
             else:
-              self.datavectors[idx] = dvs 
+              self.datavectors[idx] = payload 
               self.failed[idx] = False
             completed[idx] = True
             if src in active: # Remove worker from active list

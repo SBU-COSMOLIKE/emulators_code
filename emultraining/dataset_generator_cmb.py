@@ -1,13 +1,13 @@
 import numpy as np
-import emcee, argparse, os, sys, scipy, yaml, time, traceback, psutil, gc, math
+import emcee, argparse, os, sys, yaml, time, traceback, psutil, gc, math
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
-from tqdm import tqdm
 from pathlib import Path
 from getdist import loadMCSamples
 from collections import deque
 from numpy.lib.format import open_memmap
+import contextlib, io
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -56,11 +56,6 @@ parser.add_argument("--nparams",
                     help="Requested Number of Parameters",
                     type=int,
                     required=True)
-parser.add_argument("--mode",
-                    dest="mode",
-                    help="Which CMB data vector (ul prefix = unlensed)",
-                    type=str,
-                    choices=["lensed","unlensed"])
 parser.add_argument("--unif",
                     dest="unif",
                     help="Choose Between Uniform and Fisher based samples",
@@ -145,14 +140,14 @@ class dataset:
       raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
-    if self.nparams < 0:
+    if self.nparams <= 0:
       raise ValueError("--nparams must be positive integer")
     self.paramsf = None 
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
-      raise ValueError("--temp must be > 1")
+      raise ValueError("--temp must be => 1")
     self.unif = 0 if args.unif is None else args.unif
     self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"   
     if not os.path.isfile(f"{self.yaml}"):
@@ -176,7 +171,7 @@ class dataset:
       raise KeyError(f"Cobaya YAML missing required blocks {missing}: {self.yaml}") 
 
     train_args = info["train_args"]
-    required_keys = ['ord', 'lrange', 'derived']
+    required_keys = ['probe', 'ord', 'lrange', 'derived']
     if not self.unif == 1:
       required_keys += ['fiducial', 'params_covmat_file']
 
@@ -242,7 +237,8 @@ class dataset:
       outer = np.outer(sig, sig)
       corr  = covmat / outer 
       m = np.abs(corr - np.eye(n)).max()
-      corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
+      if m > self.maxcorr:
+        corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
       np.fill_diagonal(corr, 1.0)
       covmat = corr * outer
 
@@ -331,8 +327,8 @@ class dataset:
         del arr
         # load datavectors ends ------------------------------------------------
 
-        if self.datavectors.ndim != 2:
-          raise ValueError(f"datavectors must be 2D, got {self.datavectors.shape}") 
+        if self.datavectors.ndim != 3:
+          raise ValueError(f"datavectors must be 3D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
           raise ValueError(f"Incompatible samples/datavector chk files")
         if loadchk: 
@@ -420,8 +416,8 @@ class dataset:
         if not self.unif == 1:
           try:
             tau = np.array(sampler.get_autocorr_time(quiet=True, has_walkers=True),
-                         copy=True, 
-                         dtype=self.dtype).max()
+                           copy=True, 
+                           dtype=self.dtype).max()
             print(f"Partial Result: tau = {tau}\n"
                   f"nwalkers={nwalkers}\n"
                   f"nsteps (per walker) = {nsteps}\n"
@@ -460,7 +456,7 @@ class dataset:
         with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
           np.savetxt(f"{self.paramsf}.covmat",
                      np.array(loadMCSamples(f"{self.paramsf}", 
-                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                                            settings={'ignore_rows': u'0.'}).cov(pars=names), 
                               copy=True, 
                               dtype=self.dtype),
                      fmt="%.9e",
@@ -486,7 +482,7 @@ class dataset:
         # append chain file begins ---------------------------------------------
         fname = f"{self.paramsf}.1.txt";
         with open(fname, "a") as f: # append mode
-          hd = ' '.join(["weights","lnp"] + names)
+          hd = ' '.join(["weights","lnp"] + names + ["chi2*"])
           np.savetxt(f, 
                      np.concatenate([w, lnp, xf, chi2], axis=1), 
                      header = hd if (os.path.getsize(fname) == 0) else "",
@@ -520,13 +516,16 @@ class dataset:
         nrows   = self.datavectors.shape[0]
         ncols   = self.datavectors.shape[1]
         nstride = self.datavectors.shape[2]
+        
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
                     self.datavectors.nbytes + 
                     (nrows+nparams)*ncols*nstride*self.datavectors.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
           self.datavectors = np.vstack((self.datavectors, 
-                                        np.zeros((nparams,ncols,nstride),dtype=self.dtype)))
+                                        np.zeros((nparams,ncols,nstride),
+                                                 dtype=self.dtype)
+                                        ))
           np.save(f"{self.dvsf}.tmp.npy", self.datavectors)
           os.replace(f"{self.dvsf}.tmp.npy", f"{self.dvsf}.npy")
           self.dvs_is_memmap = False
@@ -536,7 +535,7 @@ class dataset:
                 f"We will read dvs from HD (slow)")
           datavectors = open_memmap(f"{self.dvsf}.tmp.npy", 
                                     mode="w+",
-                                    shape=(nrows + nparams, ncols),
+                                    shape=(nrows + nparams, ncols, nstride),
                                     dtype=self.datavectors.dtype)
           for s in range(0, nrows, 2500): # chunks = avoid RAM spikes) 
             e = min(nrows, s + 2500)
@@ -555,13 +554,13 @@ class dataset:
         
         # check final dimensions -----------------------------------------------
         if self.datavectors.shape[0] != self.samples.shape[0]:
-          raise ValueError(f"Incompatible samples/datavectir chk files")
+          raise ValueError(f"Incompatible samples/datavector chk files")
 
         # update a parameter cov matrix ----------------------------------------
         with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
           np.savetxt(f"{self.paramsf}.covmat",
                      np.array(loadMCSamples(f"{self.paramsf}", 
-                                            settings={'ignore_rows': '0'}).cov(pars=names), 
+                                            settings={'ignore_rows': u'0.'}).cov(pars=names), 
                               copy=True, 
                               dtype=self.dtype),
                      fmt="%.9e",
@@ -603,6 +602,12 @@ class dataset:
           out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
           out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
           out[:,3] = cmb["pp"][self.lrange[0]:self.lrange[1]+1]
+          if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
+            for i, p in enumerate(self.derived):
+              try:
+                out[i,4] = x.get_param(p)
+              except Exception:
+                pass
         elif self.probe == "unlensed" and (hasattr(x,'get_unlensed_Cl') and 
                                            callable(getattr(x,'get_unlensed_Cl'))):
           cmb = x.get_unlensed_Cl()
@@ -610,12 +615,12 @@ class dataset:
           out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
           out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
           out[:,3] = 0.0
-        elif hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
-          for i, p in enumerate(self.derived):
-            try:
-              out[i,4] = x.get_param(p)
-            except Exception:
-              pass
+          if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
+            for i, p in enumerate(self.derived):
+              try:
+                out[i,4] = x.get_param(p)
+              except Exception:
+                pass
     return out
 
   def __generate_datavectors(self):
@@ -643,11 +648,11 @@ class dataset:
         self.failed = np.asarray(self.failed).astype(bool)
         # Allocate dvs begins --------------------------------------------------
         nrows   = nparams
-        ncols   = self.lrange+1
+        ncols   = (self.lrange[1] - self.lrange[0]) + 1
         nstride = 5 # TT, TE, EE, PHIPHI, EXTRA (waste a lot of RAM but simple)
         
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
-                    nrows*ncols*nstride*dvs.dtype.itemsize )
+                    nrows*ncols*nstride*np.dtype(self.dtype).itemsize )
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
           self.datavectors = np.zeros((nrows, ncols, nstride), dtype=self.dtype)
@@ -702,11 +707,11 @@ class dataset:
           self.failed = np.asarray(self.failed).astype(bool)
           # Allocate dvs begins ------------------------------------------------
           nrows = nparams
-          ncols = ncols = self.lrange+1
+          ncols = (self.lrange[1] - self.lrange[0]) + 1
           nstride = 5 # TT, TE, EE, PHIPHI, EXTRA (waste a lot of RAM but simple)
 
           RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
-                      nrows*ncols*nstride*dvs.dtype.itemsize)
+                      nrows*ncols*nstride*np.dtype(self.dtype).itemsize )
           RAMavail = psutil.virtual_memory().available
           if RAMneed < 0.75 * RAMavail:
             self.datavectors = np.zeros((nrows, ncols, nstride), dtype=self.dtype)
@@ -733,7 +738,7 @@ class dataset:
         active  = {} # Dict: key = worker (src), value: (idx, t_start)
         
         # Start MPI workers ----------------------------------------------------
-        for w in range(0, nactive+1): 
+        for w in range(1, nactive+1): 
           j = tasks.popleft() 
           comm.send((j, self.samples[j]), dest = w, tag = TTAG)
           active[w] = (j, MPI.Wtime())
@@ -886,110 +891,26 @@ class dataset:
             continue
     return
 
-
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # main
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 
+if __name__ == "__main__":
+  comm = MPI.COMM_WORLD
+  rank = comm.Get_rank()
+  try:
+    generator = dataset()
+  except Exception:
+    traceback.print_exc()
+    comm.Abort(1)   # other ranks don’t hang in recv/barrier
+  MPI.Finalize()
+  exit(0)
 
-if __name__ == '__main__':
-    model = get_model(yaml_load(yaml_string))
-    mode = args.mode
-
-    N = args.N
-
-    prior_params = list(model.parameterization.sampled_params())
-    sampling_dim = len(prior_params)
-    camb_ell_max = args.camb_ell_max
-    camb_ell_min = args.camb_ell_min
-    PATH = os.environ.get("ROOTDIR") + '/' + args.data_path
-    datavectors_file_path = PATH + args.datavsfile
-    parameters_file  = PATH + args.paramfile
-
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    num_ranks = comm.Get_size()
-
-    print('rank',rank,'is at barrier')
-        
-    camb_ell_range = camb_ell_max-camb_ell_min
-    camb_num_spectra = 4
-    CMB_DIR = datavectors_file_path + '_cmb.npy'
-    EXTRA_DIR = datavectors_file_path + '_extra.npy'
-    u_bound = model.prior.bounds()[:,1]
-    l_bound = model.prior.bounds()[:,0]
-    if rank == 0:
-        samples = generate_parameters(N, u_bound, l_bound, mode, parameters_file)
-        total_num_dvs = len(samples)
-
-        param_info = samples[0:total_num_dvs:num_ranks]#reading for 0th rank input
-        for i in range(1,num_ranks):#sending other ranks' data
-            comm.send(
-                samples[i:total_num_dvs:num_ranks], 
-                dest = i, 
-                tag  = 1
-            )
-                
-    else:
-            
-        param_info = comm.recv(source = 0, tag = 1)
-
-    num_datavector = len(param_info)
-    total_cls = np.zeros(
-            (num_datavector, camb_ell_range, camb_num_spectra), dtype = "float32"
-        ) 
-    extra_dv = np.zeros(
-            (num_datavector, 2), dtype = "float32"
-        ) 
-    for i in range(num_datavector):
-        input_params = model.parameterization.to_input(param_info[i])
-        input_params.pop("As", None)
-
-        try:
-            model.loglike(input_params)
-            theory = list(model.theory.values())[1]
-            cmb = theory.get_Cl()
-            rdrag = theory.get_param("rdrag")
-            thetastar = theory.get_param("thetastar")
-                
-        except:
-            print('fail')
-        else:
-            total_cls[i,:,0] = cmb["tt"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,1] = cmb["te"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,2] = cmb["ee"][camb_ell_min:camb_ell_max]
-            total_cls[i,:,3] = cmb["pp"][camb_ell_min:camb_ell_max]
-
-            extra_dv[i,0] = thetastar
-            extra_dv[i,1] = rdrag
-
-    if rank == 0:
-        result_cls   = np.zeros((total_num_dvs, camb_ell_range, 4), dtype="float32")
-        result_extra = np.zeros((total_num_dvs, 2), dtype="float32") 
-        result_cls[0:total_num_dvs:num_ranks] = total_cls ## CMB       
-        result_extra[0:total_num_dvs:num_ranks]   = extra_dv ##0: 100theta^*, 1: r_drag
-
-        for i in range(1,num_ranks):        
-            result_cls[i:total_num_dvs:num_ranks] = comm.recv(source = i, tag = 10)
-            result_extra[i:total_num_dvs:num_ranks]   = comm.recv(source = i, tag = 12)
-
-        np.save(CMB_DIR, result_cls)
-        np.save(EXTRA_DIR, result_extra)
-            
-    else:    
-        comm.send(total_cls, dest = 0, tag = 10)
-        comm.send(extra_dv, dest = 0, tag = 12)
-
-
-#mpirun -n 5 --oversubscribe --mca pml ^ucx --mca btl vader,tcp,self \
-#     --bind-to core --map-by core --report-bindings --mca mpi_yield_when_idle 1 \
-#    python datageneratorcmb.py \
-#    --camb_ell_min 2 \
-#    --camb_ell_max 5000 \
-#    --data_path './trainingdata/' \
-#    --datavectors_file 'dvfilename' \
-#    --parameters_file 'paramfilename.npy' \
-#    --N 100 \
-#    --mode 'train' \
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
