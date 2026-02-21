@@ -1,13 +1,69 @@
 import numpy as np
-import emcee, argparse, os, sys, yaml, time, traceback, psutil, gc, math
+import emcee, argparse, os, sys, yaml, time, traceback 
+import psutil, gc, math, copy, tempfile
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
 from pathlib import Path
 from getdist import loadMCSamples
 from collections import deque
+from contextlib import contextmanager
 from numpy.lib.format import open_memmap
 import contextlib, io
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+# Example how to run this program
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+# The script below computes data vectors for cosmic shear (NLA, $w_0w_a$ model and Halofit.
+#
+#     mpirun -n 10 --oversubscribe \
+#       python external_modules/code/emulators/emultrf/emultraining/dataset_generator_cmb.py \
+#         --root projects/example/  \
+#         --fileroot emulators/cmb/ \
+#         --nparams 10000 \
+#         --yaml 'w0wa_takahashi_lowacc_cmb_cnn.yaml' \
+#         --datavsfile 'w0wa_takahashi_dvs_train' \
+#         --paramfile 'w0wa_takahashi_params_train' \
+#         --failfile  'w0wa_takahashi_params_failed_train' \
+#         --chain 0 \
+#         --unif 1 \
+#         --freqchk 2000 \
+#         --loadchk 0 \
+#         --append 1 
+#
+#- The requested number of data vectors is given by the `--nparams` flag.
+#
+#- There are two possible samplings.
+#  - The option `--unif 1` sets the sampling to follow a uniform distribution (respecting parameter boundaries set in the YAML file)
+#  - The option `--unif 0` sets the sampling to follow a Gaussian distribution with the following options
+#    -  The covariance matrix is set in the YAML file (keyword `params_covmat_file` inside the `train_args` block).
+#       For example, our provided YAML selects the Fisher-based *w0wa_fisher_covmat.txt* covariance matrix
+#    -  Temperature reduces the curvature of the likelihood (`cov = cov/T`) and is set by `--temp` flag 
+#    -  The correlations of the original covariance matrix are reduced to be less than `--maxcorr`.
+#
+#- For visualization purposes, setting `--chain 1` sets the script to generate the training parameters without computing the data vectors.
+#
+#- The output files are
+#
+#      # Distribution of training points ready to be plotted by GetDist
+#      w0wa_takahashi_params_train_cmblensed_unif.1.txt
+#      w0wa_takahashi_params_train_cmblensed_unif.covmat
+#      w0wa_takahashi_params_train_cmblensed_unif.paramnames
+#      w0wa_takahashi_params_train_cmblensed_unif.ranges
+#
+#      #Corresponding data vectors
+#      w0wa_takahashi_dvs_train_cmblensed_64.npy
+#      # Training parameters in which the data vector computation failed (or not computed)
+#      w0wa_takahashi_params_failed_train_cmblensed_unif.txt
+#
+#- The flags `--freqchk`, `--loadchk`, and `--append` are related to checkpoints. 
+#  - The option `--freqchk` sets the frequency at which the code saves checkpoints (chk).
+#  - The options `--loadchk` and `--append` specify whether the code loads the parameters and data vectors from a chk.
+#    In the two cases below, the code determines which remaining data vectors to compute based on the flags saved in the `--failfile` file.
+#      - Case 1 (`--loadchk 1` and `--append 1`): the code loads params from the chk and appends `~nparams` models to it. 
+#      - Case 2 (`--loadchk 1` and `--append 0`): the code loads the params.
+
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -87,6 +143,34 @@ parser.add_argument("--append",
 args, unknown = parser.parse_known_args()
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
+# Free Functions
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+@contextmanager
+def capture_native_output():
+  """
+  Redirect OS-level file descriptors to capture Fortran/C output.
+  Unlike contextlib.redirect_stderr, this catches writes from any language
+  (Fortran, C, etc.) that go directly to fd 1 (stdout) or fd 2 (stderr).
+  Author: From Claude AI.
+  """
+  stdout_fd = sys.stdout.fileno()  # fd 1 — where stdout currently points
+  stderr_fd = sys.stderr.fileno()  # fd 2 — where stderr currently points
+  stdout_dup = os.dup(stdout_fd)   # bookmark original stdout destination
+  stderr_dup = os.dup(stderr_fd)   # bookmark original stderr destination
+  tmp = tempfile.TemporaryFile(mode='w+')
+  try:
+    os.dup2(tmp.fileno(), stdout_fd) # fd 1 now writes to tmp (not terminal)
+    os.dup2(tmp.fileno(), stderr_fd) # fd 2 now writes to tmp (not terminal)
+    yield tmp
+  finally: # this block is always executed  regardless of exception generation
+    os.dup2(stdout_dup, stdout_fd)   # restore fd 1 → terminal
+    os.dup2(stderr_dup, stderr_fd)   # restore fd 2 → terminal
+    os.close(stdout_dup)             # release the bookmarks
+    os.close(stderr_dup)
+    tmp.close()
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 # Class Definition
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -125,8 +209,8 @@ class dataset:
     self.derived = None
     self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
-    if self.freqchk < 500:
-      raise ValueError("--freqchk must be >= 500") # avoid too much chk
+    if self.freqchk < 1000:
+      raise ValueError("--freqchk must be >= 1000") # avoid too much chk
     self.failed = None        # track which models failed to compute dv
     self.failf = None
     self.fiducial = None
@@ -138,10 +222,11 @@ class dataset:
     self.maxcorr = 0.15 if args.maxcorr is None else args.maxcorr
     if not (0.01 < self.maxcorr <= 1):
       raise ValueError("--maxcorr must be between (0.01,1]")
+    self.names = None
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
-    if self.nparams <= 0:
-      raise ValueError("--nparams must be positive integer")
+    if self.nparams < 200:
+      raise ValueError("--nparams must be >= 200")
     self.paramsf = None 
     self.sampled_params = None 
     self.samples = None
@@ -152,7 +237,6 @@ class dataset:
     self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"   
     if not os.path.isfile(f"{self.yaml}"):
       raise FileNotFoundError(f"YAML file not found: {self.yaml}")
-    
     
     #---------------------------------------------------------------------------
     # Load yaml
@@ -188,15 +272,14 @@ class dataset:
       raise RuntimeError(f"get_model failed for {self.yaml}: {e}") from e
 
     self.probe = train_args['probe']
-    if self.probe not in ("lensed", "unlensed"):
+    if self.probe not in ("cmblensed", "cmbunlensed"):
       raise ValueError(f"Invalid Probe: {self.probe}")
 
     self.sampled_params = train_args['ord'] # preferred ordering of params
 
     self.derived = train_args['derived']
 
-    self.lrange = train_args['lrange'][0]
-    
+    self.lrange = np.array(train_args['lrange'], dtype=int)
     if not self.unif == 1:
       fid = train_args["fiducial"] # load fiducial data vector
       
@@ -216,18 +299,20 @@ class dataset:
       # Reorder covmat ---------------------------------------------------------
       pidx = {p : i for i, p in enumerate(raw_covmat_params_names)}
       try:
-        idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
+        idx = np.array([pidx[p] for p in self.sampled_params], 
+                       copy=True, 
+                       dtype=int)
       except KeyError as e:
         raise ValueError(f"{e.args[0]!r} not found in cov header") from None
       covmat = raw_covmat[np.ix_(idx, idx)]
       
     # Reorder bounds -----------------------------------------------------------
-    names = list(self.model.parameterization.sampled_params().keys())
-    pidx = {p : i for i, p in enumerate(names)}
-    idx = np.array([pidx[p] for p in self.sampled_params], copy=True, dtype=int)
+    self.names = list(self.model.parameterization.sampled_params().keys())
+    idx = self.reorder_idx_from_yaml_to_ord()
     self.bounds = np.array(self.model.prior.bounds(confidence=0.999999),
-                           copy=True, dtype=self.dtype)[idx,:] 
-    
+                           copy=True, 
+                           dtype=self.dtype)[idx,:]
+    # adjust covmat- -----------------------------------------------------------
     if not self.unif == 1:
       #-------------------------------------------------------------------------
       # Reduce correlation on the covariance matrix to max = args.maxcorr
@@ -279,6 +364,21 @@ class dataset:
     # Setup Done
     #---------------------------------------------------------------------------
     self.setup = True
+
+  #-----------------------------------------------------------------------------
+  # reorder indexes to match YAML original ordering
+  #-----------------------------------------------------------------------------
+  def reorder_idx_from_yaml_to_ord(self):
+    pidx = {p : i for i, p in enumerate(self.names)}
+    return np.array([pidx[p] for p in self.sampled_params], 
+                    copy=True, 
+                    dtype=int)
+  
+  def reorder_idx_from_ord_to_yaml(self):
+    pidx = {p : i for i, p in enumerate(self.sampled_params)}
+    return np.array([pidx[p] for p in self.names], 
+                    copy=True, 
+                    dtype=int)
 
   #-----------------------------------------------------------------------------
   # save/load checkpoint
@@ -353,12 +453,7 @@ class dataset:
   #-----------------------------------------------------------------------------
   def __param_logpost(self,x):
     y = x - self.fiducial
-    ## begin: reoder idx from ORD keyword ordering to YAML param block ordering 
-    pidx = {p : i for i, p in enumerate(self.sampled_params)}
-    names = list(self.model.parameterization.sampled_params().keys())
-    idx = np.array([pidx[p] for p in names], copy=True, dtype=int)
-    # end reordering idx -------------------------------
-    logprior = self.model.prior.logp(x[idx])
+    logprior = self.model.prior.logp(x[self.reorder_idx_from_ord_to_yaml()])
     if math.isinf(logprior):
       return -np.inf 
     else:
@@ -379,7 +474,7 @@ class dataset:
     if (loadedfromchk == False) or (loadedfromchk == True and self.append == 1):
       ndim     = len(self.sampled_params)
       names    = list(self.sampled_params)
-      bds      = self.bounds
+      bds      = self.bounds.copy()
       nparams  = self.nparams # (if mcmc: nparams will be updated)
 
       if not self.unif == 1:
@@ -404,10 +499,21 @@ class dataset:
         xf  = xf[:nparams,:]
         lnp = np.atleast_2d(lnp[:nparams]).T
       else:
-        xf  = np.random.uniform(low  = bds[:,0], 
-                                high = bds[:,1], 
+        tbds = self.bounds.copy()
+        # extra safety so logprior is not -infty --------------------
+        tbds[:,0] = np.where(bds[:,0] > 0, 1.0001*bds[:,0], 0.9999*bds[:,0])
+        tbds[:,1] = np.where(bds[:,1] > 0, 0.9999*bds[:,1], 1.0001*bds[:,1])
+        xf  = np.random.uniform(low  = tbds[:,0], 
+                                high = tbds[:,1], 
                                 size = (nparams,ndim))
         lnp = np.ones((nparams,1), dtype=self.dtype)
+        # Double check that prior is not -infty --------------------------------
+        for i, x in enumerate(xf):
+          idx = self.reorder_idx_from_ord_to_yaml()
+          logprior = self.model.prior.logp(x[idx])
+          if math.isinf(logprior):
+              raise ValueError(f"Sample {i} has -inf prior. (should not happen)"
+                               f"Values: {dict(zip(self.sampled_params, x))}")
       w = np.ones((nparams,1), dtype=self.dtype)
       chi2 = -2*lnp
 
@@ -452,6 +558,16 @@ class dataset:
         # copy samples to self.samples  ----------------------------------------
         self.samples = np.array(xf, copy=True, dtype=self.dtype)
 
+        # save paramname files -------------------------------------------------
+        param_info = self.model.info()['params']
+        latex  = [param_info[x]['latex'] for x in names]
+        paramnames = copy.deepcopy(names)
+        paramnames.append("chi2*")
+        latex.append("\\chi^2")
+        np.savetxt(f"{self.paramsf}.paramnames", 
+                   np.column_stack((paramnames,latex)),
+                   fmt="%s")
+
         # save a cov matrix ------------------------------------------------------
         with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
           np.savetxt(f"{self.paramsf}.covmat",
@@ -462,15 +578,6 @@ class dataset:
                      fmt="%.9e",
                      header=' '.join(names),
                      comments="# ")
-
-        # save paramname files -------------------------------------------------
-        param_info = self.model.info()['params']
-        latex  = [param_info[x]['latex'] for x in names]
-        names.append("chi2*")
-        latex.append("\\chi^2")
-        np.savetxt(f"{self.paramsf}.paramnames", 
-                   np.column_stack((names,latex)),
-                   fmt="%s")
 
         # delete arrays (save RAM) ---------------------------------------------
         del w         # save RAM memory
@@ -578,49 +685,70 @@ class dataset:
   # datavectors
   #-----------------------------------------------------------------------------
   def _compute_dvs_from_sample(self, sample):
-    param = self.model.parameterization.to_input(
-        sampled_params_values=dict(zip(self.sampled_params, sample))
+    # Define fortran errors we want to capture ---------------------------------
+    camb_error_keywords = {"ERROR", "error", "Did not converge"}
+
+    # Compute data vector (within using cobaya API) ----------------------------
+    idx = self.reorder_idx_from_ord_to_yaml()
+    param = dict(self.model.parameterization.to_input(
+        sampled_params_values=dict(zip(self.names, sample[idx])))
     )
     self.model.provider.set_current_input_params(param)
-    
+
+    # Check prior before attempting computation --------------------------------
+    if math.isinf(self.model.prior.logp(sample[idx])):
+      raise RuntimeError(f"Prior is -inf (this should not happen). "
+                         f"Values: {dict(zip(self.sampled_params, sample))}")
+
+    # Compute data vector (within using cobaya API) ----------------------------
     nrows = (self.lrange[1] - self.lrange[0]) + 1
     ncols = 5
     out = np.zeros((nrows, ncols), dtype=self.dtype)
-    
+
+    captured = 0
+    with capture_native_output() as tmp:
+      for (x, _), z in zip(self.model._component_order.items(),
+                           self.model._params_of_dependencies):
+        x.check_cache_and_compute(
+            params_values_dict=dict({p: param[p] for p in x.input_params}),
+            want_derived=self.derived,
+            dependency_params=list(param.keys()),
+            cached=True
+        )
+      tmp.seek(0)
+      captured = tmp.read()
+    if any(kw in captured for kw in camb_error_keywords):
+      raise RuntimeError(f"CAMB Fortran error: {captured.strip()}")
     for (x, _), z in zip(self.model._component_order.items(),
                          self.model._params_of_dependencies):
-        x.check_cache_and_compute(
-            params_values_dict={p: param[p] for p in x.input_params},
-            want_derived={},
-            dependency_params=[param[p] for p in z],
-            cached=False
-        )
-        if self.probe == "lensed" and (hasattr(x,'get_Cl') and 
-                                       callable(getattr(x,'get_Cl'))):
-          cmb = x.get_Cl()
-          out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
-          out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
-          out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
-          out[:,3] = cmb["pp"][self.lrange[0]:self.lrange[1]+1]
-          if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
-            for i, p in enumerate(self.derived):
-              try:
-                out[i,4] = x.get_param(p)
-              except Exception:
-                pass
-        elif self.probe == "unlensed" and (hasattr(x,'get_unlensed_Cl') and 
-                                           callable(getattr(x,'get_unlensed_Cl'))):
-          cmb = x.get_unlensed_Cl()
-          out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
-          out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
-          out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
-          out[:,3] = 0.0
-          if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
-            for i, p in enumerate(self.derived):
-              try:
-                out[i,4] = x.get_param(p)
-              except Exception:
-                pass
+      if (self.probe == "cmblensed" and
+          hasattr(x,'get_Cl') and
+          callable(getattr(x,'get_Cl'))):    
+        cmb = x.get_Cl()
+        out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
+        out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
+        out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
+        out[:,3] = 0.0
+        if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
+          for i, p in enumerate(self.derived):
+            try:
+              out[i,4] = x.get_param(p)
+            except Exception:
+              pass
+      elif (self.probe == "cmbunlensed" and
+            hasattr(x,'get_Cl') and
+            callable(getattr(x,'get_Cl'))):   
+        cmb = x.get_unlensed_Cl()
+        out[:,0] = cmb["tt"][self.lrange[0]:self.lrange[1]+1]
+        out[:,1] = cmb["te"][self.lrange[0]:self.lrange[1]+1]
+        out[:,2] = cmb["ee"][self.lrange[0]:self.lrange[1]+1]
+        out[:,3] = 0.0
+        if hasattr(x, 'get_param') and callable(getattr(x, 'get_param')):
+          for i, p in enumerate(self.derived):
+            try:
+              out[i,4] = x.get_param(p)
+            except Exception:
+              pass
     return out
 
   def __generate_datavectors(self):
@@ -677,15 +805,17 @@ class dataset:
         try:
           dvs = self._compute_dvs_from_sample(self.samples[i])
           self.failed[i] = False
-        except Exception: # set datavector to zero and continue
+        except Exception as e: # set datavector to zero and continue
           self.failed[i] = True
           self.datavectors[i,:,:] = 0.0
-          sys.stderr.write(f"[Rank 0] Worker 0 failed at i={i}\n")
+          sys.stderr.write(f"[Rank 0] Worker failed at idx={i}\n")
+          sys.stderr.write(f"[Rank 0] Exception type: {type(e).__name__}\n")
+          sys.stderr.write(f"[Rank 0] Exception message: {e}\n")
+          sys.stderr.write(f"[Rank 0] Traceback: {traceback.format_exc(limit=8)}\n")
           sys.stderr.flush()
           continue
         self.datavectors[i,:,:] = dvs[:,:]
-
-        if i % self.freqchk == 0:
+        if i % self.freqchk == 0 and i > 0:
           print(f"Model number: {i+1} (total: {nparams}) - checkpoint", flush=True)
           self.__save_chk()
       self.__save_chk()
@@ -762,7 +892,7 @@ class dataset:
               self.datavectors[idx,:,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {payload}\n")
+                               f"[Rank 0] Traceback: {payload}\n")
               sys.stderr.flush() 
             else:
               self.datavectors[idx,:,:] = payload[:,:] 
@@ -820,7 +950,7 @@ class dataset:
               self.datavectors[idx,:,:] = 0.0
               self.failed[idx] = True
               sys.stderr.write(f"[Rank 0] Worker {src} failed at idx={idx}\n"
-                               f"Reason: {payload}\n")
+                               f"(MPI) Msg: {payload}\n")
               sys.stderr.flush()
             else:
               self.datavectors[idx,:,:] = payload[:,:]
@@ -884,7 +1014,9 @@ class dataset:
           try:
             dvs = self._compute_dvs_from_sample(sample)
             comm.send(("ok", idx, dvs), dest = 0, tag = RTAG)
-          except Exception:
+          except Exception as e:
+            sys.stderr.write(f"[Rank {rank}] Exception type: {type(e).__name__}\n")
+            sys.stderr.write(f"[Rank {rank}] Exception message: {e}\n")
             comm.send(("err", idx, traceback.format_exc(limit=8)), 
                       dest = 0, 
                       tag = RTAG)

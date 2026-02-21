@@ -1,5 +1,5 @@
 import numpy as np
-import emcee, argparse, os, sys, yaml, time, traceback, psutil, gc, math
+import emcee, argparse, os, sys, yaml, time, traceback, psutil, gc, math, copy
 from cobaya.yaml import yaml_load
 from cobaya.model import get_model
 from mpi4py import MPI
@@ -20,7 +20,7 @@ import contextlib, io
 #         --root projects/roman_real/  \
 #         --fileroot emulators/nla_cosmic_shear/ \
 #         --nparams 10000 \
-#         --yaml 'w0wa_takahashi_cs_CNN.yaml' \
+#         --yaml 'w0wa_takahashi_cs_cnn.yaml' \
 #         --datavsfile 'w0wa_takahashi_dvs_train' \
 #         --paramfile 'w0wa_takahashi_params_train' \
 #         --failfile  'w0wa_takahashi_params_failed_train' \
@@ -47,15 +47,15 @@ import contextlib, io
 #- The output files are
 #
 #      # Distribution of training points ready to be plotted by GetDist
-#      w0wa_params_train_cs_64.1.txt
-#      w0wa_params_train_cs_64.covmat
-#      w0wa_params_train_cs_64.paramnames
-#      w0wa_params_train_cs_64.ranges
+#      w0wa_takahashi_params_train_cs_64.1.txt
+#      w0wa_takahashi_params_train_cs_64.covmat
+#      w0wa_takahashi_params_train_cs_64.paramnames
+#      w0wa_takahashi_params_train_cs_64.ranges
 #
 #      #Corresponding data vectors
-#      w0wa_takahashi_nobaryon_dvs_train_cs_64.npy
-#      # Training parameters in which the data vector computation failed
-#      w0wa_params_failed_train_cs_64.txt
+#      w0wa_takahashi_dvs_train_cs_64.npy
+#      # Training parameters in which the data vector computation failed (or not computed)
+#      w0wa_takahashi_params_failed_train_cs_64.txt
 #
 #- The flags `--freqchk`, `--loadchk`, and `--append` are related to checkpoints. 
 #  - The option `--freqchk` sets the frequency at which the code saves checkpoints (chk).
@@ -179,8 +179,8 @@ class dataset:
     self.dvsf = None 
     self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
-    if self.freqchk < 500:
-      raise ValueError("--freqchk must be >= 500") # avoid too much chk
+    if self.freqchk < 1000:
+      raise ValueError("--freqchk must be >= 1000") # avoid too much chk
     self.failed = None        # track which models failed to compute dv
     self.failf = None
     self.fiducial = None
@@ -193,8 +193,8 @@ class dataset:
       raise ValueError("--maxcorr must be between (0.01,1]")
     self.model = None
     self.nparams = 10000 if args.nparams is None else args.nparams
-    if self.nparams <= 0:
-      raise ValueError("--nparams must be positive integer")
+    if self.nparams < 200:
+      raise ValueError("--nparams must be >= 200")
     self.paramsf = None 
     self.probe = None
     self.sampled_params = None 
@@ -427,7 +427,7 @@ class dataset:
     if (loadedfromchk == False) or (loadedfromchk == True and self.append == 1):
       ndim     = len(self.sampled_params)
       names    = list(self.sampled_params)
-      bds      = self.bounds
+      bds      = self.bounds.copy()
       nparams  = self.nparams # (if mcmc: nparams will be updated)
 
       if not self.unif == 1:
@@ -435,7 +435,7 @@ class dataset:
         nsteps   = int(max(7500, nparams/nwalkers)) # (for safety we assume tau>100)
         burnin   = int(0.3*nsteps)                       # 30% burn-in
         thin     = max(1,int(0.8*float((nsteps-burnin)*nwalkers)/nparams))
-        
+          
         sampler = emcee.EnsembleSampler(nwalkers = nwalkers, 
                                         ndim = ndim, 
                                         moves=[(emcee.moves.DEMove(), 0.8),
@@ -499,6 +499,17 @@ class dataset:
         
         # copy samples to self.samples  ----------------------------------------
         self.samples = np.array(xf, copy=True, dtype=self.dtype)
+        
+        # save paramname files -------------------------------------------------
+        param_info = self.model.info()['params']
+        latex  = [param_info[x]['latex'] for x in names]
+        paramnames = copy.deepcopy(names)
+        paramnames.append("chi2*")
+        latex.append("\\chi^2")
+        printf("hello!")
+        np.savetxt(f"{self.paramsf}.paramnames", 
+                   np.column_stack((paramnames,latex)),
+                   fmt="%s")
 
         # save a cov matrix ------------------------------------------------------
         with contextlib.redirect_stdout(io.StringIO()): # so getdist dont write in terminal
@@ -510,15 +521,6 @@ class dataset:
                      fmt="%.9e",
                      header=' '.join(names),
                      comments="# ")
-
-        # save paramname files -------------------------------------------------
-        param_info = self.model.info()['params']
-        latex  = [param_info[x]['latex'] for x in names]
-        names.append("chi2*")
-        latex.append("\\chi^2")
-        np.savetxt(f"{self.paramsf}.paramnames", 
-                   np.column_stack((names,latex)),
-                   fmt="%s")
 
         # delete arrays (save RAM) ---------------------------------------------
         del w         # save RAM memory
@@ -931,6 +933,7 @@ class dataset:
 # main
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
+
 if __name__ == "__main__":
   comm = MPI.COMM_WORLD
   rank = comm.Get_rank()
