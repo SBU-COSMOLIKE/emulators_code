@@ -63,7 +63,6 @@ import contextlib, io
 #    In the two cases below, the code determines which remaining data vectors to compute based on the flags saved in the `--failfile` file.
 #      - Case 1 (`--loadchk 1` and `--append 1`): the code loads params from the chk and appends `~nparams` models to it. 
 #      - Case 2 (`--loadchk 1` and `--append 0`): the code loads the params.
-
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Command line args
@@ -228,16 +227,16 @@ class dataset:
     if self.nparams < 200:
       raise ValueError("--nparams must be >= 200")
     self.paramsf = None 
+    self.probe = None
     self.sampled_params = None 
     self.samples = None
     self.temp = 128 if args.temp is None else args.temp
     if self.temp < 1:
       raise ValueError("--temp must be => 1")
     self.unif = 0 if args.unif is None else args.unif
-    self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"   
+    self.yaml = f"{fileroot}/test.yaml" if args.yaml is None else f"{fileroot}/{args.yaml}"
     if not os.path.isfile(f"{self.yaml}"):
       raise FileNotFoundError(f"YAML file not found: {self.yaml}")
-    
     #---------------------------------------------------------------------------
     # Load yaml
     #---------------------------------------------------------------------------
@@ -271,7 +270,7 @@ class dataset:
     except Exception as e:
       raise RuntimeError(f"get_model failed for {self.yaml}: {e}") from e
 
-    self.probe = train_args['probe']
+    self.probe = train_args["probe"]
     if self.probe not in ("cmblensed", "cmbunlensed"):
       raise ValueError(f"Invalid Probe: {self.probe}")
 
@@ -324,7 +323,7 @@ class dataset:
       m = np.abs(corr - np.eye(n)).max()
       if m > self.maxcorr:
         corr /= max(1.0, m / self.maxcorr) if m > 0 else 1.0
-      np.fill_diagonal(corr, 1.0)
+        np.fill_diagonal(corr, 1.0)
       covmat = corr * outer
 
       #-------------------------------------------------------------------------
@@ -623,10 +622,10 @@ class dataset:
         nrows   = self.datavectors.shape[0]
         ncols   = self.datavectors.shape[1]
         nstride = self.datavectors.shape[2]
-        
+
         RAMneed = ( self.samples.nbytes + self.failed.nbytes + 
                     self.datavectors.nbytes + 
-                    (nrows+nparams)*ncols*nstride*self.datavectors.dtype.itemsize)
+                    (nrows + nparams)*ncols*nstride*self.datavectors.dtype.itemsize)
         RAMavail = psutil.virtual_memory().available
         if RAMneed < 0.75 * RAMavail:
           self.datavectors = np.vstack((self.datavectors, 
@@ -790,9 +789,9 @@ class dataset:
                 f"There is {RAMavail/1e9:.2f} GB of RAM available. "
                 f"We will read dvs from HD (slow)")
           self.datavectors = open_memmap(f"{self.dvsf}.npy", 
-                                       mode="w+",
-                                       shape=(nrows, ncols, nstride),
-                                       dtype=self.dtype)
+                                         mode="w+",
+                                         shape=(nrows, ncols, nstride),
+                                         dtype=self.dtype)
           self.datavectors[::] = 0.0
           self.datavectors.flush()
           self.dvs_is_memmap = True
@@ -868,7 +867,7 @@ class dataset:
         active  = {} # Dict: key = worker (src), value: (idx, t_start)
         
         # Start MPI workers ----------------------------------------------------
-        for w in range(1, nactive+1): 
+        for w in range(1, nactive+1):
           j = tasks.popleft() 
           comm.send((j, self.samples[j]), dest = w, tag = TTAG)
           active[w] = (j, MPI.Wtime())
