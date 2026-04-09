@@ -68,7 +68,7 @@ class PkEmulator:
                  model_file: str = None,
                  metadata_file: str = None,
                  base_model_path: str = "models", 
-                 metadata_path: str = "metadata_w0wa", 
+                 metadata_path: str = "metadata_w0wacdm", 
                  num_batches: int = 10):
         """Initializes the emulator by loading all necessary models and metadata.
         
