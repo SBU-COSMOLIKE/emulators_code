@@ -53,19 +53,34 @@ class PkEmulator:
 
     # --- Configuration Constants (Class Attributes) ---
     N_PCS = 25          # Number of k-space PCs per redshift
-    N_K_MODES = 240     # Number of k modes
+    N_K_MODES = 500     # Number of k modes
     
     # Fixed k and z grids
     K_MODES = np.logspace(-5.1, 2, N_K_MODES)
     Z_MODES = np.concatenate((
-        np.linspace(0, 2, 30, endpoint=False),
-        np.linspace(2, 10, 10, endpoint=False),
+        np.linspace(0, 3, 33, endpoint=False),
+        np.linspace(3, 10, 7, endpoint=False),
         np.linspace(10, 50, 12)
     ))
     N_ZS = len(Z_MODES)  # Number of redshift bins
     
-    def __init__(self, base_model_path: str = "models", metadata_path: str = "metadata", num_batches: int = 10):
-        """Initializes the emulator by loading all necessary models and metadata."""
+    def __init__(self, 
+                 model_file: str = None,
+                 metadata_file: str = None,
+                 base_model_path: str = "models", 
+                 metadata_path: str = "metadata_w0wa", 
+                 num_batches: int = 10):
+        """Initializes the emulator by loading all necessary models and metadata.
+        
+        Args:
+        model_file:     Explicit path to the .h5 model file. If provided, takes
+                        precedence over base_model_path. Set via yaml extra_args.
+        metadata_file:  Explicit path to the metadata.joblib bundle. If provided,
+                        takes precedence over metadata_path. Set via yaml extra_args.
+        base_model_path: Fallback relative path to models dir (legacy behaviour).
+        metadata_path:   Fallback relative path to metadata dir (legacy behaviour).
+        num_batches:     Used only for legacy path fallback.
+        """
         
         if not _DEPENDENCIES_LOADED:
             raise RuntimeError("Cannot initialize PkEmulator due to missing dependencies.")
@@ -77,12 +92,39 @@ class PkEmulator:
         self.METADATA_DIR = ROOT / metadata_path
         self.NUM_BATCHES = num_batches
         
+        if model_file is not None:
+            resolved_model_path = Path(model_file)
+        else:
+            # LEGACY: construct path from base_model_path directory
+            resolved_model_path = self.MODEL_DIR / "emulator_w0wacdm.h5"
+
+        if metadata_file is not None:
+            resolved_metadata_path = Path(metadata_file)
+        else:
+            # LEGACY: construct path from metadata_path directory
+            resolved_metadata_path = self.METADATA_DIR / "metadata.joblib"
         # Load the core components using Path objects
         try:
-            self.param_scaler = joblib.load(self.METADATA_DIR / f"param_scaler_lowk_{num_batches}_batches")
-            self.t_comp_pca = joblib.load(self.METADATA_DIR / "t_components_pca_lowk")
+            # Old version: 
+            # self.param_scaler = joblib.load(self.METADATA_DIR / f"param_scaler_lowk_{num_batches}_batches")
+            # self.t_comp_pca = joblib.load(self.METADATA_DIR / "t_components_pca_lowk")
+
+            _bundle = joblib.load(resolved_metadata_path)
+            self.param_scaler = _bundle["param_scaler"]
+            self.t_comp_pca   = _bundle["t_comp_pca"]
+            self._metadata_bundle = _bundle
+
+            # Old version:
+            # self.model = keras.models.load_model(
+            #     self.MODEL_DIR / f"emulator_w0wacdm.h5",
+            #     custom_objects={
+            #         "CustomActivationLayer": CustomActivationLayer,
+            #         "mse": MeanSquaredError()
+            #     },
+            # )
+
             self.model = keras.models.load_model(
-                self.MODEL_DIR / f"emulator.h5",
+                resolved_model_path,
                 custom_objects={
                     "CustomActivationLayer": CustomActivationLayer,
                     "mse": MeanSquaredError()
@@ -125,79 +167,135 @@ class PkEmulator:
             logging.warning("Please ensure the 'models' and 'metadata' directories are correctly placed relative to pk_emulator.py.")
             raise
     
+    # Old version:
+    # def _load_pcas_and_scalers(self):
+    #     """
+    #     Eager loading of PCA and Scaler objects with pre-computation of inverse transforms.
+        
+    #     Only loads these if they haven't been loaded yet. This is called
+    #     automatically during __init__ to pre-compute inverse transformation matrices.
+        
+    #     Pre-computes the combined inverse PCA + inverse scaling
+    #     transformation matrices for maximum performance.
+    #     """
+    #     if self._pcas_loaded:
+    #         return  # Already loaded
+        
+    #     logging.info("[PkEmulator] Loading PCA and Scaler objects...")
+        
+    #     try:
+    #         # Load individual PCA and Scaler objects
+    #         for z in self.Z_MODES:
+    #             z_key = float(f"{z:.3f}")
+    #             self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
+    #             self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
+            
+    #         logging.info("[PkEmulator] PCA and Scaler objects loaded successfully.")
+    #         logging.info("[PkEmulator] Pre-computing inverse transformation matrices...")
+            
+    #         # Pre-compute combined inverse transformation matrices
+    #         # This combines: (PCs @ PCA.components_ + PCA.mean_) * std + mean
+    #         # Into a single matrix multiplication + offset addition
+            
+    #         inverse_matrices = []
+    #         inverse_offsets = []
+            
+    #         for z in self.Z_MODES:
+    #             z_key = float(f"{z:.3f}")
+    #             pca = self.PCAS[z_key]
+    #             scaler = self.SCALERS[z_key]
+                
+    #             # Get the scaling factor (handle both sklearn and custom Scaler)
+    #             if hasattr(scaler, 'scale_'):
+    #                 scale = scaler.scale_  # sklearn StandardScaler
+    #                 mean = scaler.mean_
+    #             elif hasattr(scaler, 'std'):
+    #                 scale = scaler.std     # Custom Scaler
+    #                 mean = scaler.mean
+    #             else:
+    #                 raise AttributeError(f"Scaler object has neither 'scale_' nor 'std' attribute")
+                
+    #             # Combined transformation matrix
+    #             # Shape: (N_PCS, N_K_MODES)
+    #             # Each row of PCA.components_ is scaled element-wise by scaler.std
+    #             combined_matrix = pca.components_ * scale[None, :]
+                
+    #             # Combined offset vector
+    #             # Shape: (N_K_MODES,)
+    #             # This is: PCA.mean_ * scaler.std + scaler.mean
+    #             combined_offset = pca.mean_ * scale + mean
+                
+    #             inverse_matrices.append(combined_matrix)
+    #             inverse_offsets.append(combined_offset)
+            
+    #         # Stack into arrays for vectorized operations
+    #         # Shape: (N_ZS, N_PCS, N_K_MODES)
+    #         self.INVERSE_TRANSFORM_MATRICES = np.stack(inverse_matrices, axis=0).astype(np.float32)
+            
+    #         # Shape: (N_ZS, N_K_MODES)
+    #         self.INVERSE_TRANSFORM_OFFSETS = np.stack(inverse_offsets, axis=0).astype(np.float32)
+            
+    #         self._pcas_loaded = True
+    #         logging.info("[PkEmulator] Inverse transformation matrices pre-computed successfully.")
+            
+    #     except FileNotFoundError as e:
+    #         logging.error(f"CRITICAL: Required PCA/Scaler file not found: {e.filename}")
+    #         logging.warning("Please ensure the 'metadata' directory contains all PCA and scaler files.")
+    #         raise
     def _load_pcas_and_scalers(self):
         """
         Eager loading of PCA and Scaler objects with pre-computation of inverse transforms.
         
-        Only loads these if they haven't been loaded yet. This is called
-        automatically during __init__ to pre-compute inverse transformation matrices.
-        
-        Pre-computes the combined inverse PCA + inverse scaling
-        transformation matrices for maximum performance.
+        Loads from the single 'metadata.joblib' bundle (already in memory via
+        self._metadata_bundle) rather than hitting the filesystem per redshift.
+        Pre-computes the combined inverse PCA + inverse scaling transformation
+        matrices for maximum performance.
         """
         if self._pcas_loaded:
             return  # Already loaded
-        
-        logging.info("[PkEmulator] Loading PCA and Scaler objects...")
-        
+
+        logging.info("[PkEmulator] Loading PCA and Scaler objects from metadata bundle...")
+
         try:
-            # Load individual PCA and Scaler objects
-            for z in self.Z_MODES:
-                z_key = float(f"{z:.3f}")
-                self.PCAS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.pca")
-                self.SCALERS[z_key] = joblib.load(self.METADATA_DIR / f"Z{z:.3f}_lowk.frac_pks_scaler")
-            
-            logging.info("[PkEmulator] PCA and Scaler objects loaded successfully.")
+            self.PCAS    = self._metadata_bundle["pcas"]
+            self.SCALERS = self._metadata_bundle["scalers"]
+
+            logging.info("[PkEmulator] PCA and Scaler objects loaded from bundle.")
             logging.info("[PkEmulator] Pre-computing inverse transformation matrices...")
-            
-            # Pre-compute combined inverse transformation matrices
-            # This combines: (PCs @ PCA.components_ + PCA.mean_) * std + mean
-            # Into a single matrix multiplication + offset addition
-            
+
             inverse_matrices = []
-            inverse_offsets = []
-            
+            inverse_offsets  = []
+
             for z in self.Z_MODES:
-                z_key = float(f"{z:.3f}")
-                pca = self.PCAS[z_key]
+                z_key  = float(f"{z:.3f}")
+                pca    = self.PCAS[z_key]
                 scaler = self.SCALERS[z_key]
-                
-                # Get the scaling factor (handle both sklearn and custom Scaler)
+
                 if hasattr(scaler, 'scale_'):
-                    scale = scaler.scale_  # sklearn StandardScaler
-                    mean = scaler.mean_
+                    scale = scaler.scale_
+                    mean  = scaler.mean_
                 elif hasattr(scaler, 'std'):
-                    scale = scaler.std     # Custom Scaler
-                    mean = scaler.mean
+                    scale = scaler.std
+                    mean  = scaler.mean
                 else:
-                    raise AttributeError(f"Scaler object has neither 'scale_' nor 'std' attribute")
-                
-                # Combined transformation matrix
-                # Shape: (N_PCS, N_K_MODES)
-                # Each row of PCA.components_ is scaled element-wise by scaler.std
+                    raise AttributeError(
+                        f"Scaler object has neither 'scale_' nor 'std' attribute"
+                    )
+
                 combined_matrix = pca.components_ * scale[None, :]
-                
-                # Combined offset vector
-                # Shape: (N_K_MODES,)
-                # This is: PCA.mean_ * scaler.std + scaler.mean
                 combined_offset = pca.mean_ * scale + mean
-                
+
                 inverse_matrices.append(combined_matrix)
                 inverse_offsets.append(combined_offset)
-            
-            # Stack into arrays for vectorized operations
-            # Shape: (N_ZS, N_PCS, N_K_MODES)
+
             self.INVERSE_TRANSFORM_MATRICES = np.stack(inverse_matrices, axis=0).astype(np.float32)
-            
-            # Shape: (N_ZS, N_K_MODES)
-            self.INVERSE_TRANSFORM_OFFSETS = np.stack(inverse_offsets, axis=0).astype(np.float32)
-            
+            self.INVERSE_TRANSFORM_OFFSETS  = np.stack(inverse_offsets,  axis=0).astype(np.float32)
+
             self._pcas_loaded = True
             logging.info("[PkEmulator] Inverse transformation matrices pre-computed successfully.")
-            
-        except FileNotFoundError as e:
-            logging.error(f"CRITICAL: Required PCA/Scaler file not found: {e.filename}")
-            logging.warning("Please ensure the 'metadata' directory contains all PCA and scaler files.")
+
+        except (KeyError, FileNotFoundError) as e:
+            logging.error(f"CRITICAL: Could not load metadata from bundle: {e}")
             raise
     
     def _compute_mps_approximation(self, params: np.ndarray) -> np.ndarray:
@@ -292,6 +390,7 @@ class PkEmulator:
         if use_syren is True:
             # Bypass emulator - return only symbolic approximation
             pks = pk_mps
+            np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/syren_only_pks", pk_mps[0])
         else:
             # Default behavior: apply emulator corrections
             # Generate predicted fractional differences (shape N_ZS, N_K_MODES)
@@ -299,6 +398,13 @@ class PkEmulator:
             
             # Full emulated P(k, z)
             pks = (frac * pk_mps).astype(np.float32)
+            # print("ks", self.K_MODES[:40])
+            # print("zs", self.Z_MODES[-1])
+            # print("MPS: ", pk_mps[0][:40])
+            # print("Corrected: ", pks[0][:40])
+            # # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_ks", self.K_MODES)
+            # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/syren_pks_z50", pk_mps[-1]) #[-19])
+            # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_pks_z50", pks[-1]) #[-19])
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks
