@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from . import train_utils_pk_emulator as utils
 sys.modules['train_utils_pk_emulator'] = utils
-from . train_utils_pk_emulator import CustomActivationLayer
+from . train_utils_pk_emulator import CustomActivationLayer, TComponentScaler
 from keras.losses import MeanSquaredError
 import time
 import tensorflow as tf
@@ -67,6 +67,7 @@ class PkEmulator:
     def __init__(self, 
                  model_file: str = None,
                  metadata_file: str = None,
+                 model_type: str = "mlp",
                  base_model_path: str = "models", 
                  metadata_path: str = "metadata_w0wacdm", 
                  num_batches: int = 10):
@@ -96,6 +97,7 @@ class PkEmulator:
             resolved_model_path = Path(model_file)
         else:
             # LEGACY: construct path from base_model_path directory
+            # resolved_model_path = self.MODEL_DIR / "emulator_npce.keras"
             resolved_model_path = self.MODEL_DIR / "emulator_w0wacdm.h5"
 
         if metadata_file is not None:
@@ -112,6 +114,56 @@ class PkEmulator:
             _bundle = joblib.load(resolved_metadata_path)
             self.param_scaler = _bundle["param_scaler"]
             self.t_comp_pca   = _bundle["t_comp_pca"]
+
+            self.model_type = model_type  # start with the passed-in default ('mlp')
+
+            if model_file is not None:
+                # User specified a path — trust the bundle's own record over the default
+                bundle_model_type = _bundle.get("model_type", None)
+                print("Bundle model type: ", str(bundle_model_type))
+                if bundle_model_type is not None:
+                    self.model_type = bundle_model_type
+                    logging.info(f"[PkEmulator] model_type '{self.model_type}' inferred from metadata bundle.")
+                else:
+                    # Bundle has no model_type key — fall back to inferring from input shape
+                    try:
+                        input_shape = self.model.input_shape  # e.g. (None, 351) or (None, 7)
+                        n_inputs = input_shape[-1]
+                        if n_inputs == 7:
+                            self.model_type = "mlp"
+                        else:
+                            self.model_type = "npce"
+                        logging.warning(
+                            f"[PkEmulator] 'model_type' not found in bundle. "
+                            f"Inferred '{self.model_type}' from model input shape {input_shape}."
+                        )
+                    except Exception:
+                        logging.warning(
+                            "[PkEmulator] Could not infer model_type from model input shape. "
+                            "Defaulting to 'mlp'."
+                        )
+
+            # t-component scaler, optional
+            self.t_comp_scaler = _bundle.get("t_comp_scaler", None)
+            if self.t_comp_scaler is not None:
+                logging.info("[PkEmulator] t_comp_scaler loaded from bundle.")
+            else:
+                logging.warning("[PkEmulator] t_comp_scaler not in bundle — assuming raw t-components.")
+
+            # NPCE: PCE index matrix
+            self._pce_indices = _bundle.get("npce_indices", None)
+            if model_type == "npce":
+                if self._pce_indices is None:
+                    raise ValueError(
+                        "model_type='npce' but bundle['npce_indices'] is None. "
+                        "Please (re)package your metadata."
+                    )
+                logging.info(
+                    f"[PkEmulator] PCE indices loaded: "
+                    f"{self._pce_indices.shape[0]} basis terms, "
+                    f"{self._pce_indices.shape[1]} dims."
+                )
+                
             self._metadata_bundle = _bundle
 
             # Old version:
@@ -123,12 +175,19 @@ class PkEmulator:
             #     },
             # )
 
+            # self.model = keras.models.load_model(
+            #     resolved_model_path,
+            #     custom_objects={
+            #         "CustomActivationLayer": CustomActivationLayer,
+            #         "mse": MeanSquaredError()
+            #     },
+            # )
             self.model = keras.models.load_model(
                 resolved_model_path,
                 custom_objects={
                     "CustomActivationLayer": CustomActivationLayer,
-                    "mse": MeanSquaredError()
                 },
+                compile=False,   # loss not needed for inference; avoids serialization issues
             )
 
             # Create compiled inference function with XLA
@@ -153,7 +212,9 @@ class PkEmulator:
             # Warm up both the neural network AND the compiled function
             logging.info("[PkEmulator] Warming up neural network...")
             dummy_params = self.param_scaler.transform(np.array([[2.0, 0.96, 67.0, 0.05, 0.3, -1.0, 0.0]], dtype=np.float32))
-            dummy_tf = tf.constant(dummy_params, dtype=tf.float32)
+            # dummy_tf = tf.constant(dummy_params, dtype=tf.float32)
+            dummy_input = self._make_network_input(dummy_params)
+            dummy_tf    = tf.constant(dummy_input, dtype=tf.float32)
             
             # Warm up compiled function (first call triggers XLA compilation)
             _ = self._compiled_inference(dummy_tf)
@@ -297,7 +358,28 @@ class PkEmulator:
         except (KeyError, FileNotFoundError) as e:
             logging.error(f"CRITICAL: Could not load metadata from bundle: {e}")
             raise
-    
+    def _evaluate_pce_basis(self, X_norm: np.ndarray) -> np.ndarray:
+        indices   = self._pce_indices
+        X_clipped = np.clip(X_norm, -1.0, 1.0).astype(np.float64)
+        N, D      = X_clipped.shape
+        max_deg   = int(indices.max()) if indices.size > 0 else 0
+
+        pow_table = np.empty((D, max_deg + 1, N), dtype=np.float64)
+        pow_table[:, 0, :] = 1.0
+        if max_deg >= 1:
+            pow_table[:, 1, :] = X_clipped.T
+        for p in range(2, max_deg + 1):
+            pow_table[:, p, :] = pow_table[:, p - 1, :] * X_clipped.T
+
+        d_idx   = np.arange(D)[np.newaxis, :]
+        powered = pow_table[d_idx, indices, :]
+        return powered.prod(axis=1).T.astype(np.float32)
+
+    def _make_network_input(self, params_norm: np.ndarray) -> np.ndarray:
+        if self.model_type == "mlp":
+            return params_norm.astype(np.float32)
+        return self._evaluate_pce_basis(params_norm)
+
     def _compute_mps_approximation(self, params: np.ndarray) -> np.ndarray:
         """
         Computes the analytical P_lin(k, z) approximation.
@@ -332,39 +414,61 @@ class PkEmulator:
         result = result / h**3
         return result.astype(np.float32)
 
-    def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
-        """Optimized NN inference using compiled TensorFlow function.
-        Performs the full NN prediction and PCA reconstructions,
-        optimized using compiled TensorFlow function.
+    # Old version:
+    # def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
+    #     """Optimized NN inference using compiled TensorFlow function.
+    #     Performs the full NN prediction and PCA reconstructions,
+    #     optimized using compiled TensorFlow function.
         
-        This method requires PCA and Scaler objects, which are loaded
-        at initialization to avoid unnecessary loading during evaluation.
+    #     This method requires PCA and Scaler objects, which are loaded
+    #     at initialization to avoid unnecessary loading during evaluation.
         
-        Args:
-            params: Normalized 2D array of parameters (1, N_params).
+    #     Args:
+    #         params: Normalized 2D array of parameters (1, N_params).
             
-        Returns:
-            np.ndarray: Final predicted log fractional differences, shape (N_ZS, N_K_MODES).
-        """
-        # Convert to TF tensor and use compiled inference
-        params_tf = tf.constant(params, dtype=tf.float32)
+    #     Returns:
+    #         np.ndarray: Final predicted log fractional differences, shape (N_ZS, N_K_MODES).
+    #     """
+    #     # Convert to TF tensor and use compiled inference
+    #     params_tf = tf.constant(params, dtype=tf.float32)
 
-        # Predict T-components
-        t_comps_pred = self._compiled_inference(params_tf).numpy()
+    #     # Predict T-components
+    #     t_comps_pred = self._compiled_inference(params_tf).numpy()
         
-        # Inverse T-components to flat k-PCs (shape 1, N_ZS * N_PCS)
-        pcs_flat = self.t_comp_pca.inverse_transform(t_comps_pred).astype(np.float32)
+    #     # Inverse T-components to flat k-PCs (shape 1, N_ZS * N_PCS)
+    #     pcs_flat = self.t_comp_pca.inverse_transform(t_comps_pred).astype(np.float32)
 
-        # Reshape to individual redshifts (shape N_ZS, N_PCS)
-        # We drop the single batch dimension (axis 0) since we only have one cosmology
+    #     # Reshape to individual redshifts (shape N_ZS, N_PCS)
+    #     # We drop the single batch dimension (axis 0) since we only have one cosmology
+    #     pcs_pred_z_stack = pcs_flat.reshape(self.N_ZS, self.N_PCS)
+        
+    #     reconstructed_fracs = (
+    #         np.einsum('zp,zpk->zk', pcs_pred_z_stack, self.INVERSE_TRANSFORM_MATRICES) +
+    #         self.INVERSE_TRANSFORM_OFFSETS
+    #     )
+        
+    #     return reconstructed_fracs.astype(np.float32)
+
+    def _predict_fracs_all_z(self, params: np.ndarray) -> np.ndarray:
+        # Build network input (PCE expansion for NPCE, identity for MLP)
+        net_input = self._make_network_input(params)
+        params_tf = tf.constant(net_input, dtype=tf.float32)
+
+        t_comps_norm = self._compiled_inference(params_tf).numpy()
+
+        if self.t_comp_scaler is not None:
+            t_comps_raw = self.t_comp_scaler.inverse_transform(t_comps_norm)
+        else:
+            t_comps_raw = t_comps_norm
+
+        pcs_flat = self.t_comp_pca.inverse_transform(t_comps_raw).astype(np.float32)
+
         pcs_pred_z_stack = pcs_flat.reshape(self.N_ZS, self.N_PCS)
-        
-        reconstructed_fracs = (
-            np.einsum('zp,zpk->zk', pcs_pred_z_stack, self.INVERSE_TRANSFORM_MATRICES) +
-            self.INVERSE_TRANSFORM_OFFSETS
+        reconstructed = (
+            np.einsum('zp,zpk->zk', pcs_pred_z_stack, self.INVERSE_TRANSFORM_MATRICES)
+            + self.INVERSE_TRANSFORM_OFFSETS
         )
-        
-        return reconstructed_fracs.astype(np.float32)
+        return reconstructed.astype(np.float32)
 
     def get_pks(self, params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -403,8 +507,8 @@ class PkEmulator:
             # print("MPS: ", pk_mps[0][:40])
             # print("Corrected: ", pks[0][:40])
             # # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_ks", self.K_MODES)
-            # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/syren_pks_z50", pk_mps[-1]) #[-19])
-            # np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/emul_pks_z50", pks[-1]) #[-19])
+            np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/syren_pks_z50", pk_mps[-1]) #[-19])
+            np.save(f"/gpfs/projects/MirandaGroup/vic/cocoa/Cocoa/mlp_pks_z50", pks[-1]) #[-19])
 
         # Return the k-modes, z-modes, and the P(k,z) array
         return self.K_MODES, self.Z_MODES, pks
@@ -436,6 +540,17 @@ def get_pks(params: List[float], use_syren: bool = None) -> Tuple[np.ndarray, np
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: (k_modes, z_modes, P(k,z)).
     """
-    if _pk_emulator_instance is None:
-        raise RuntimeError("PkEmulator is not loaded. Check prior error messages regarding dependencies or files.")
-    return _pk_emulator_instance.get_pks(params, use_syren=use_syren)
+    # Old version:
+    # if _pk_emulator_instance is None:
+    #     raise RuntimeError("PkEmulator is not loaded. Check prior error messages regarding dependencies or files.")
+    # return _pk_emulator_instance.get_pks(params, use_syren=use_syren)
+
+    _pk_emulator_instance = None
+    if _DEPENDENCIES_LOADED:
+        try:
+            _pk_emulator_instance = PkEmulator()
+        except Exception as e:
+            logging.info(
+                f"[PkEmulator] Module-level singleton not loaded "
+                f"(expected if using explicit model_file/metadata_file): {e}"
+            )

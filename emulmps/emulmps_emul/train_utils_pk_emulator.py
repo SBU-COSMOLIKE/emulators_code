@@ -1,4 +1,4 @@
-# Essential components required for fastMPS emulator
+# Essential components required for fastMPS emulator — MLP + NPCE
 
 
 import numpy as np
@@ -66,3 +66,25 @@ class CustomActivationLayer(layers.Layer):
     def compute_output_shape(self, input_shape):
         return (input_shape[0], self.units)
     
+
+class TComponentScaler:
+    """
+    Per-column standardisation for t-components.
+    Stores mean and std computed on the training set so that inference can
+    invert the transform consistently.
+    """
+    def __init__(self):
+        self.mean_ = None
+        self.std_  = None
+
+    def fit(self, T: np.ndarray) -> "TComponentScaler":
+        self.mean_ = T.mean(axis=0)
+        self.std_  = T.std(axis=0)
+        self.std_  = np.where(self.std_ == 0, 1.0, self.std_)
+        return self
+
+    def transform(self, T: np.ndarray) -> np.ndarray:
+        return (T - self.mean_) / self.std_
+
+    def inverse_transform(self, T_norm: np.ndarray) -> np.ndarray:
+        return T_norm * self.std_ + self.mean_
