@@ -515,7 +515,7 @@ class emulmps(Theory):
                 # Compute sigma8 at z=0 if requested (using linear P(k))
                 if 'sigma8' in self.output_params:
                     derived['sigma8'] = self._compute_sigma8(
-                        Pk_lin_hmpc, k_hmpc, z_array, z=0.0
+                        Pk_lin_mpc, k_mpc, z_array, z=0.0
                     )
                 state["derived"] = derived
             

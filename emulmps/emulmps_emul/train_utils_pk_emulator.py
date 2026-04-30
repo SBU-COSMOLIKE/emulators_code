@@ -5,12 +5,13 @@ import numpy as np
 import tensorflow as tf
 from keras import layers
 
-#k=1e-5 to 1e2 (with 2400 steps in log space)
-ks = np.logspace(-5, 2, 2400)
-z1_mps = np.linspace(0, 2, 100, endpoint=False)
-z2_mps = np.linspace(2, 10, 10, endpoint=False)
-z3_mps = np.linspace(10, 50, 12)
-z_mps = np.concatenate((z1_mps, z2_mps, z3_mps), axis=0)
+
+ks = np.logspace(-5.1, 2, 500)
+z_mps = np.concatenate((
+    np.linspace(0, 3, 33, endpoint=False),
+    np.linspace(3, 10, 7, endpoint=False),
+    np.linspace(10, 50, 12)
+))
 
         
 
@@ -61,8 +62,6 @@ class CustomActivationLayer(layers.Layer):
     def from_config(cls, config):
         # Use the saved config to reconstruct the class instance
         return cls(**config)
-    # ========================================
-
     def compute_output_shape(self, input_shape):
         return (input_shape[0], self.units)
     
