@@ -358,6 +358,19 @@ class emulmps(Theory):
         
         # Build requirements dictionary
         self.req = {param: None for param in self.param_order}
+
+        model_file    = self.extra_args.get('model_file', None)
+        metadata_file = self.extra_args.get('metadata_file', None)
+        model_type    = self.extra_args.get('model_type', 'mlp')
+
+        from .emulmps_emul.emulmps_w0wa import PkEmulator
+        self._emulator = PkEmulator(
+            model_file=model_file,
+            metadata_file=metadata_file,
+            model_type=model_type,
+        )
+        self.log.info(f"PkEmulator loaded (model_file={model_file}, metadata_file={metadata_file})")
+
         
         # Log initialization with cosmology info
         # Note: 'w' is treated as 'w0' internally, so check for wa presence
@@ -462,7 +475,7 @@ class emulmps(Theory):
             # Call the emulmps emulator
             # Returns: k_modes (h/Mpc), z_modes, Pk_linear ((Mpc/h)^3)
             # Pass use_syren flag to control whether to apply emulator corrections
-            k_mpc, z_array, Pk_lin_mpc = get_pks(emul_params, use_syren=self.use_syren)
+            k_mpc, z_array, Pk_lin_mpc = self._emulator.get_pks(emul_params, use_syren=self.use_syren)
             
             # Extract h from H0
             h = params['H0'] / 100.0
@@ -502,7 +515,7 @@ class emulmps(Theory):
                 # Compute sigma8 at z=0 if requested (using linear P(k))
                 if 'sigma8' in self.output_params:
                     derived['sigma8'] = self._compute_sigma8(
-                        Pk_lin_hmpc, k_hmpc, z_array, z=0.0
+                        Pk_lin_mpc, k_mpc, z_array, z=0.0
                     )
                 state["derived"] = derived
             
