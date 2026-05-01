@@ -617,7 +617,6 @@ class PkEmulator:
         """Return True if a nonlinear boost model has been loaded."""
         return self._nl_model is not None
 
-
 # --- Public Module-Level Interface ---
 
 _pk_emulator_instance = None
