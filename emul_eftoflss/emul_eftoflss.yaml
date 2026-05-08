@@ -1,0 +1,114 @@
+path: null
+extra_args:
+  # Sets interpolation density of points in both k and z
+  #   This interpolation uses linear interpolation and constant extrapolation
+  #   Whereas CAMB will use cubic interpolation
+  accuracyboost: 1
+  # Optional non-linear reference reference boost
+  #   Currently we implemented euclidemu2, but others will be added
+  reference_nonlin: 'none'
+  # The k-mode in which to fit the counterterms to the reference spectrum
+  k_fit: 0.5 
+  # k_uv: where to truncate the EFT and replace with a 
+  #   rescaled reference spectrum
+  #   the reference spectrum is the linear spectrum unless
+  #   reference_nonlin != 'none', in which case the reference 
+  #   is the nonlin_reference
+  k_uv: 0.5
+  # The file containing the pca coordinate transform for the 
+  #   counterterm spline coefficients
+  eft_pca_file: 'none'
+  # Option to run on the GPU by setting to 'cuda' or 'cuda:(gpu index)'
+  device: 'cpu'
+
+params:
+  eft_1:
+    value: 0.0
+  eft_2:
+    value: 0.0
+  eft_3:
+    value: 0.0
+  eft_4:
+    value: 0.0
+  eft_5:
+    value: 0.0
+  eft_6:
+    value: 0.0
+  eft_7:
+    value: 0.0
+  eft_8:
+    value: 0.0
+  eft_9:
+    value: 0.0
+  eft_10:
+    value: 0.0
+  eft_11:
+    value: 0.0
+  eft_12:
+    value: 0.0
+  eft_13:
+    value: 0.0
+  eft_14:
+    value: 0.0
+  eft_15:
+    value: 0.0
+  eft_16:
+    value: 0.0
+  eft_17:
+    value: 0.0
+  eft_18:
+    value: 0.0
+  eft_19:
+    value: 0.0
+  eft_20:
+    value: 0.0
+  eft_21:
+    value: 0.0
+  eft_22:
+    value: 0.0
+  eft_23:
+    value: 0.0
+  eft_24:
+    value: 0.0
+  eft_25:
+    value: 0.0
+  eft_26:
+    value: 0.0
+  eft_27:
+    value: 0.0
+  eft_28:
+    value: 0.0
+  eft_29:
+    value: 0.0
+  eft_30:
+    value: 0.0
+  eft_31:
+    value: 0.0
+  eft_32:
+    value: 0.0
+  eft_33:
+    value: 0.0
+  eft_34:
+    value: 0.0
+  eft_35:
+    value: 0.0
+  eft_36:
+    value: 0.0
+  eft_37:
+    value: 0.0
+  eft_38:
+    value: 0.0
+  eft_39:
+    value: 0.0
+  eft_40:
+    value: 0.0
+  eft_41:
+    value: 0.0
+  eft_42:
+    value: 0.0
+  eft_43:
+    value: 0.0
+  eft_44:
+    value: 0.0
+  eft_45:
+    value: 0.0
