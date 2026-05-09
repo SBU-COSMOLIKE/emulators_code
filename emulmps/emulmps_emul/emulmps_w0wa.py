@@ -58,10 +58,6 @@ ROOT = _get_project_root()
 
 try:
     from tensorflow import keras
-<<<<<<< HEAD
-=======
-    #from colossus.cosmology import cosmology as Cosmo
->>>>>>> 7aaf69e (eliminated collosus lib (#13))
     import sys; sys.path.insert(0, f"{ROOT}/symbolic_pofk")
     from symbolic_pofk.linear import plin_emulated, get_approximate_D, growth_correction_R, As_to_sigma8
     from symbolic_pofk.syrenhalofit import run_halofit_vec
