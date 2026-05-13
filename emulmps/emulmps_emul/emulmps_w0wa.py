@@ -536,7 +536,6 @@ class PkEmulator:
         pcs_z = self._nl_t_comp_pca.inverse_transform(t_comps_raw).reshape(
             self.N_ZS, self._nl_n_pcs
         )
-        print("I was here!")
 
         return (np.einsum('zp,zpk->zk',
                           pcs_z.astype(np.float32),
