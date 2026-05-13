@@ -536,7 +536,6 @@ class PkEmulator:
         pcs_z = self._nl_t_comp_pca.inverse_transform(t_comps_raw).reshape(
             self.N_ZS, self._nl_n_pcs
         )
-        print("I was here!")
 
         return (np.einsum('zp,zpk->zk',
                           pcs_z.astype(np.float32),
@@ -592,6 +591,15 @@ class PkEmulator:
         x_norm = self._norm_params_for_scaler(buf, self._nl_param_scaler)
 
         boost = (np.exp(self._predict_nl_fracs_all_z(x_norm)) * syren_boost).astype(np.float32)
+
+        k_t = 0.005  # [1/Mpc]
+        n   = 2.0   # 1 = pure exponential, larger = sharper transition
+        self._lin_to_nl_weight = (
+            1.0 - np.exp(-(self.K_MODES / k_t)**n)
+        ).astype(np.float32)
+
+        self._k_lin_mask = self.K_MODES < k_t
+        boost = 1.0 + (boost - 1.0) * self._lin_to_nl_weight
 
         return self.K_MODES, self.Z_MODES, boost
 
