@@ -457,7 +457,7 @@ class PkEmulator:
             return_boost=True,
             Plin_in=Pk_lin * h**3,
         )
-        return boost / h**3
+        return boost
 
     def _predict_fracs_all_z(self, params_norm: np.ndarray) -> np.ndarray:
         """Linear model: normalised params -> log-frac for all z."""
