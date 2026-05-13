@@ -344,7 +344,7 @@ class emulmps(Theory):
 
         Nonlinear strategy (in priority order):
           1. Emulated boost (get_boost on the loaded NL model).
-          2. Symbolic fallback (_apply_nonlinear_boost via symbolic_pofk).
+          2. Symbolic fallback (via symbolic_pofk).
           3. Linear only.
         """
         try:
@@ -376,29 +376,9 @@ class emulmps(Theory):
             # ------------------------------------------------------------------
             # Nonlinear P(k)
             # ------------------------------------------------------------------
-            Pk_nl_mpc = None
+            _, _, boost = self._emulator.get_boost(emul_params, pk_lin=Pk_lin_mpc, use_syren=self.use_syren)
 
-            if self._emulator.has_nl_model():
-                # Strategy 1: emulated boost
-                try:
-                    _, _, boost = self._emulator.get_boost(emul_params)
-                    Pk_nl_mpc  = (boost * Pk_lin_mpc).astype(np.float32)
-                    self.log.debug("Nonlinear P(k) computed via emulated boost.")
-                except Exception as exc:
-                    self.log.warning(
-                        f"Emulated boost failed ({exc}); "
-                        "falling back to symbolic nonlinear correction."
-                    )
-                    Pk_nl_mpc = None
-
-            if Pk_nl_mpc is None and self.nonlinear_method is not None:
-                # Strategy 2: symbolic fallback
-                Pk_nl_mpc = self._apply_nonlinear_boost(
-                    Pk_lin_mpc * h**3, k_mpc / h, z_array, params
-                )
-                self.log.debug(
-                    f"Nonlinear P(k) computed via {self.nonlinear_method}."
-                )
+            Pk_nl_mpc  = (boost * Pk_lin_mpc).astype(np.float32)
 
             # ------------------------------------------------------------------
             # Store results
@@ -416,6 +396,20 @@ class emulmps(Theory):
                 'z': z_array,
                 'Pk': Pk_lin_mpc,
             }
+
+            pks_to_check = [Pk_lin_mpc]
+            if Pk_nl_mpc is not None:
+                pks_to_check.append(Pk_nl_mpc)
+
+            for pk in pks_to_check:
+                has_neg = np.any(pk < 0)
+                has_pos = np.any(pk > 0)
+                if has_neg and has_pos:
+                    self.log.debug(
+                        f"Mixed-sign P(k) detected at params={params} — "
+                        "bad point in parameter space."
+                    )
+                    return False
 
             if want_derived:
                 derived = {}
@@ -517,7 +511,7 @@ class emulmps(Theory):
                 sign = -1
             else:
                 log_p = False
-                self.log.warning(
+                self.log.debug(
                     "Power spectrum has both positive and negative values; "
                     "using linear interpolation."
                 )
@@ -547,41 +541,6 @@ class emulmps(Theory):
 
         self.current_state[key] = result
         return result
-
-    def _apply_nonlinear_boost(self, Pk_lin_hmpc, k_hmpc, z_array, params, emulator='EH'):
-        """
-        Symbolic nonlinear boost fallback via symbolic_pofk.
-
-        Parameters
-        ----------
-        Pk_lin_hmpc : (n_z, n_k) array in (Mpc/h)^3
-        k_hmpc      : k-modes in h/Mpc
-        z_array     : redshift array
-        params      : Cobaya parameter dict
-
-        Returns
-        -------
-        np.ndarray : Nonlinear P(k,z) in Mpc^3 (same shape as Pk_lin_hmpc / h^3)
-        """
-        As_1e9 = params['As_1e9']
-        ns     = params['ns']
-        H0     = params['H0']
-        h      = H0 / 100.0
-        Ob     = params['omegab']
-        Om     = params['omegam']
-        w0     = params.get('w0', params.get('w', -1.0))
-        wa     = params.get('wa', 0.0)
-        a_array = 1.0 / (1.0 + z_array)
-
-        sigma8 = symbolic_linear.As_to_sigma8(As_1e9, Om, Ob, h, ns, 0.06, w0, wa)
-
-        boost = run_halofit_vec(
-            k_hmpc, sigma8, Om, Ob, h, ns, a_array,
-            return_boost=True,
-            Plin_in=Pk_lin_hmpc,
-        )
-        Pk_nl_hmpc = Pk_lin_hmpc * boost / h**3
-        return Pk_nl_hmpc
 
     def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):
         """Compute sigma8 from linear P(k) at redshift z."""

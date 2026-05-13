@@ -49,7 +49,8 @@ ROOT = _get_project_root()
 try:
     from tensorflow import keras
     import sys; sys.path.insert(0, f"{ROOT}/symbolic_pofk")
-    from symbolic_pofk.linear import plin_emulated, get_approximate_D, growth_correction_R
+    from symbolic_pofk.linear import plin_emulated, get_approximate_D, growth_correction_R, As_to_sigma8
+    from symbolic_pofk.syrenhalofit import run_halofit_vec
     _DEPENDENCIES_LOADED = True
 except ImportError as e:
     _warn(f"A required dependency could not be imported: {e.name}. "
@@ -443,6 +444,21 @@ class PkEmulator:
         growth = (Dz / D0) ** 2 * (Rz / R0)
         return ((pk_fid * growth[:, None]) / h**3).astype(np.float32)
 
+    def _compute_boost_approximation(self, Pk_lin, params: np.ndarray) -> np.ndarray:
+        """Symbolic nonlinear boost fallback via symbolic_pofk."""
+        As, ns, H0_in, Ob, Om, w0, wa = params
+        h   = float(H0_in) / 100.0
+        k_h = self.K_MODES / h
+
+        sigma8 = As_to_sigma8(As, Om, Ob, h, ns, 0.06, w0, wa)
+
+        boost = run_halofit_vec(
+            k_h, sigma8, Om, Ob, h, ns, self._a_array,
+            return_boost=True,
+            Plin_in=Pk_lin * h**3,
+        )
+        return boost / h**3
+
     def _predict_fracs_all_z(self, params_norm: np.ndarray) -> np.ndarray:
         """Linear model: normalised params -> log-frac for all z."""
         net_input    = self._make_network_input(params_norm)
@@ -531,6 +547,7 @@ class PkEmulator:
         self,
         params: List[float],
         pk_lin: Optional[np.ndarray] = None,
+        use_syren: bool = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Return the nonlinear boost B(k,z) = P_nonlin/P_lin predicted by the
@@ -562,16 +579,18 @@ class PkEmulator:
                 "Pass nl_model_file and nl_metadata_file to PkEmulator.__init__()."
             )
 
-        buf = np.array(params, dtype=np.float32).reshape(1, -1)
+        buf = self._params_buf
+        buf[0, :] = params
+
+        syren_boost = self._compute_boost_approximation(pk_lin, params)
+
+        if use_syren is True:
+            return self.K_MODES, self.Z_MODES, syren_boost
 
         # Convert wa -> w0+wa before the NL scaler (same training convention)
         x_norm = self._norm_params_for_scaler(buf, self._nl_param_scaler)
 
-        log_boost = self._predict_nl_fracs_all_z(x_norm)   # (N_ZS, N_K_MODES)
-        boost     = np.exp(log_boost).astype(np.float32)
-
-        if pk_lin is not None:
-            return self.K_MODES, self.Z_MODES, (boost * pk_lin).astype(np.float32)
+        boost = (np.exp(self._predict_nl_fracs_all_z(x_norm)) * syren_boost).astype(np.float32)
 
         return self.K_MODES, self.Z_MODES, boost
 
