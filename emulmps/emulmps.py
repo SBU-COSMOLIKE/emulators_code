@@ -371,14 +371,30 @@ class emulmps(Theory):
                 emul_params, use_syren=self.use_syren
             )
 
-            h = params['H0'] / 100.0
+            if not np.all(np.isfinite(Pk_lin_mpc)) or np.any(Pk_lin_mpc <= 0):
+                self.log.debug(f"Non-finite or non-positive Pk_lin at params={params} — rejecting point.")
+                return False
 
             # ------------------------------------------------------------------
             # Nonlinear P(k)
             # ------------------------------------------------------------------
             _, _, boost = self._emulator.get_boost(emul_params, pk_lin=Pk_lin_mpc, use_syren=self.use_syren)
 
+            if not np.all(np.isfinite(boost)) or np.any(boost <= 0):
+                self.log.debug(
+                    f"Non-finite or non-positive boost at params={params} — "
+                    "rejecting point."
+                )
+                return False
+
             Pk_nl_mpc  = (boost * Pk_lin_mpc).astype(np.float32)
+
+            if not np.all(np.isfinite(Pk_nl_mpc)) or np.any(Pk_nl_mpc <= 0):
+                self.log.debug(
+                    f"Non-finite or non-positive Pk_nl at params={params} — "
+                    "rejecting point."
+                )
+                return False
 
             # ------------------------------------------------------------------
             # Store results
@@ -396,20 +412,6 @@ class emulmps(Theory):
                 'z': z_array,
                 'Pk': Pk_lin_mpc,
             }
-
-            pks_to_check = [Pk_lin_mpc]
-            if Pk_nl_mpc is not None:
-                pks_to_check.append(Pk_nl_mpc)
-
-            for pk in pks_to_check:
-                has_neg = np.any(pk < 0)
-                has_pos = np.any(pk > 0)
-                if has_neg and has_pos:
-                    self.log.debug(
-                        f"Mixed-sign P(k) detected at params={params} — "
-                        "bad point in parameter space."
-                    )
-                    return False
 
             if want_derived:
                 derived = {}
