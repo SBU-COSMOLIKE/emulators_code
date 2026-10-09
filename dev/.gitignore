@@ -1,0 +1,13 @@
+.matplotlib_cache/
+~/
+.ipynb_checkpoints/
+.vscode/
+.broadcast.py.swp
+.DS_Store
+*.pyc
+./driver/.DS_Store
+./emulator/.DS_Store
+
+# per-machine Claude Code local settings (permission grants etc.); keep role
+# files and commands tracked, just not this one
+.claude/settings.local.json

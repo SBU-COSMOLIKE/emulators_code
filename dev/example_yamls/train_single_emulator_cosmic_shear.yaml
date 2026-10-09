@@ -1,0 +1,313 @@
+# Config for train_single_emulator_cosmic_shear.py
+#
+# The data files below are bare filenames; the driver resolves them under
+# $ROOTDIR/<--root>/chains (where dataset_generator_lensing.py writes the
+# dvs / params / covmat), so no folder prefix and no dependence on the
+# launch directory. The cosmolike_data_dir / cosmolike_dataset keys are
+# separate: they live under $ROOTDIR/external_modules/data, not under --root.
+
+data:
+  train_dv:     w0wa_takahashi_dvs_train_cs_16.npy
+  train_params: w0wa_takahashi_params_train_cs_16.1.txt
+  train_covmat: w0wa_takahashi_params_train_cs_16.covmat
+  val_dv:       w0wa_takahashi_dvs_train_cs_8.npy
+  val_params:   w0wa_takahashi_params_train_cs_8.1.txt
+
+  cosmolike_data_dir: lsst_y1
+  cosmolike_dataset:  lsst_y1_M1_GGL0.05.dataset
+
+  omegabh2_cut:  0.035   # drop omega_b h^2 >= this (the hard corner)
+  omegabh2_lo:   0.014   # ... and <= this (Planck omega_b h^2 = 0.0224;
+                         # omit for no lower cut)
+  omegam2h2_lo:  0.015   # keep omegam^2 h^2 = (Omega_m H0/100)^2 above this
+  omegam2h2_hi:  0.08    # ... and below this (both tails are rarefied and
+                         # fail; Planck sits at 0.045; omit a key for no cut)
+  train_divisor: 10      # N_train = N // train_divisor
+  val_divisor:   50      # N_val   = N // val_divisor
+  split_seed:    0
+  ram_frac:      0.7     # RAM fraction stage_source may fill
+
+# Read ONLY by sweep_hyperparam_emulator_cosmic_shear.py (the other
+# drivers ignore this block): sweep exactly one train_args leaf, named
+# by its dotted path, over the listed values (one full training per
+# value at fixed N_train; outputs a value/frac table + figure like the
+# N_train sweep). Any leaf works: bs, lr.lr_base, scheduler.patience,
+# trim.start, model.mlp.width, model.cnn.kernel_size, model.cnn.film
+# (values true/false), head.lr_base, ... Special case: parameter
+# model.activation sweeps the activation family (values H / power /
+# multigate / gated_power; leave --activation unset). model.name and
+# model.ia are refused (they change the model class -- one sweep per
+# architecture).
+#
+# sweep:
+#   parameter: lr.lr_base
+#   values:
+#     - 0.0010
+#     - 0.0025
+#     - 0.0063
+
+train_args:
+  nepochs:   1600
+  bs:        256
+  loss_mode: sqrt        # sqrt | chi2 | sqrt_dchi2
+  silent:    false       # false -> per-epoch progress lines
+
+  # Stability guards (both optional, both default OFF; the trunk: /
+  # head: blocks below can override either per phase).
+  # clip = per-step gradient-norm ceiling: the full gradient vector
+  # is rescaled to norm <= clip before each optimizer step (same
+  # direction, bounded size), so one monster-outlier batch cannot
+  # kick the weights -- the train-loss-spike epochs a quadratic
+  # (chi2) loss produces on a fat-tailed training set. 0 = off.
+  # rewind = on every plateau-scheduler lr cut, reload the
+  # best-so-far weights AND the optimizer state snapshotted with
+  # them, keeping the new (reduced) lr. At a true plateau this is a
+  # no-op (best ~= current); after an excursion into a bad basin it
+  # is the rescue -- the run resumes from its best point at most
+  # `patience` epochs after the damage, instead of decaying the lr
+  # inside the wreckage and freezing there. Plateau scheduler only.
+  # clip:   1.0
+  # rewind: true
+
+  # Two-phase schedule (a factored correction head: name rescnn |
+  # restrf + ia: nla; omit or 0 = joint training).
+  # Phase 1 (epochs 1..trunk_epochs): the correction head is bypassed,
+  # so the model trains as pure nla at nla cost per epoch. Phase 2 (the
+  # remaining nepochs - trunk_epochs): the trunk freezes at phase 1's
+  # BEST epoch and runs under no_grad (no trunk backward); only the
+  # head + gates train, from a zero-init identity start, so the loss is
+  # continuous at the handoff. Fresh optimizer / lr warmup / scheduler /
+  # trim / focus schedules per phase.
+  # trunk_epochs: 1500
+
+  # Per-phase overrides, SYMMETRIC (both need trunk_epochs > 0; error
+  # otherwise). The top-level loss_mode / lr / trim / focus / clip /
+  # rewind are the shared defaults; the trunk: block overrides them
+  # for phase 1 and the head: block for phase 2. Every key is
+  # optional and falls back to the shared value; trim / focus are
+  # FULL replacement blocks (same keys as the main ones, incl. kappa
+  # -- no merging), restarting at the phase's own epoch 1.
+  # trunk:                   # phase 1 (pure-trunk training)
+  #   lr_base:   0.0025
+  #   loss_mode: sqrt
+  #   trim:
+  #     start:         0.1
+  #     end:           0.01  # floor, never 0.0: the worst fraction
+  #                          # stays out of the loss forever
+  #     hold_epochs:   50
+  #     anneal_epochs: 400
+  #     shape:         cosine
+  #   focus:
+  #     start:         0.0
+  #     end:           2.0
+  #     hold_epochs:   50
+  #     anneal_epochs: 300
+  #     shape:         linear
+  #     kappa:         0.15
+  # head:                    # phase 2 (frozen trunk, head only)
+  #   lr_base:   0.001       # phase-2 base lr (same sqrt-batch rule)
+  #   loss_mode: sqrt        # chi2 is sharper on the tail but needs
+  #                          # the trim floor + clip (an untrimmed
+  #                          # quadratic loss will fit the monster
+  #                          # tail at the bulk's expense)
+  #   trim:
+  #     start:         0.03
+  #     end:           0.01  # floor, never 0.0
+  #     hold_epochs:   15
+  #     anneal_epochs: 100
+  #     shape:         cosine
+  #   focus:                 # all-zero = focal weighting off in
+  #     start:         0.0   # phase 2 (omit the block entirely and
+  #     end:           0.0   # the head INHERITS the top-level focus
+  #     hold_epochs:   1     # schedule instead)
+  #     anneal_epochs: 1
+  #     shape:         linear
+  #     kappa:         0.15
+  #   clip:      1.0         # bound per-step grads (chi2 + fat tail)
+  #   rewind:    true        # self-heal after an excursion
+
+  model:
+    # Two orthogonal choices pick the model class; the other keys are
+    # its kwargs. YAML keeps the LAST occurrence of a duplicated key
+    # silently, so never leave two uncommented copies of one key (a
+    # stray duplicate runs the wrong model with no error). The startup
+    # banner prints the resolved class, so check it.
+    #
+    # `name` = the ARCHITECTURE:
+    #
+    #   resmlp  Plain residual MLP. The baseline; maps the whitened
+    #           parameters straight to the whitened data vector.
+    #
+    #   rescnn  ResMLP trunk + a 1-D CNN correction head: the
+    #           theta-order dv splits into its (xi+/-, source-pair)
+    #           bins, the bins are the conv CHANNELS, and ONE kernel
+    #           slides along theta over the whole data vector --
+    #           theta-local and cross-bin, with no channel expansion
+    #           (uncomment the conv-head knobs below).
+    #
+    #   restrf  ResMLP trunk + a bin-token TRANSFORMER correction
+    #           head (uncomment the TRF knobs below): the theta-order
+    #           dv splits into its (xi+/-, source-pair) tomographic
+    #           bins, each bin is one token, attention shares
+    #           information ACROSS bins, and each bin then gets its
+    #           own private MLP stack (a textbook transformer shares
+    #           one MLP across tokens; the unique weights also stand
+    #           in for the positional encoding). For cross-bin
+    #           structure in the residuals.
+    #
+    # `ia` = the factored intrinsic-alignment design layered on the
+    # architecture (OMIT the key for the plain emulator):
+    #
+    #   nla     The net emits 3 templates from the non-amplitude
+    #           inputs and the loss combines them in closed form:
+    #             xi = K1 + A1 * K2 + A1^2 * K3
+    #           The amplitude A1 (= LSST_A1_1) never enters the
+    #           network, so the emulator is exact in it and its prior
+    #           costs zero training coverage. LSST_A1_2 (the eta
+    #           power) stays an input. With name: rescnn / restrf the
+    #           gated head corrects the templates before the combine
+    #           (both treat the (template, bin) pairs as their units:
+    #           conv channels / attention tokens) -- the polynomial is
+    #           untouched, so the correction stays exact in A1.
+    #
+    #   tatt    The same factoring with 3 amplitudes (a1, a2, b_TA
+    #           = LSST_A1_1 / LSST_A2_1 / LSST_BTA_1) and 10
+    #           templates -- exact in all three amplitudes; the
+    #           redshift powers (LSST_A1_2, LSST_A2_2) stay emulated
+    #           inputs. The code path is live; a run needs dv dumps
+    #           holding the 10 templates.
+    #
+    name:        resmlp
+    # ia:        nla
+    #
+    # Each component nests its own knobs, so the names stay short --
+    # cnn.n_blocks and trf.n_blocks need no suffixes. A head block the
+    # architecture does not have is IGNORED (keep cnn: and trf: both
+    # configured and switch models by changing name: alone); unknown
+    # keys at the top level or inside the ACTIVE blocks are loud
+    # errors.
+    #
+    # The trunk (required; every architecture is built on it):
+    mlp:
+      width:    128        # residual-block width
+      n_blocks: 4          # number of residual blocks
+    #
+    # Activation for the ResBlocks (the heads share it). type is one
+    # of:
+    #   H            the paper's learnable leaky/Swish gate (default)
+    #   power        H with a bounded learnable tail exponent
+    #   multigate    K independent gates (K = n_gates)
+    #   gated_power  K gates + the tail exponent
+    # The --activation flag, when given, overrides type. A bare
+    # string (activation: H) is accepted as shorthand for the type.
+    # activation:
+    #   type:    H
+    #   n_gates: 3         # gates K for multigate / gated_power
+    #
+    # Conv head (name: rescnn only). The channels are the bins
+    # themselves (with ia: nla, the (template, bin) pairs --
+    # cross-template AND cross-bin; A1 exactness is unaffected, it
+    # lives in the loss combine), so the head's tensors never exceed
+    # the padded dv size and there is no channels knob to budget.
+    # cnn:
+    #   kernel_size: 11    # conv kernel width (odd), tuned as if
+    #                      # n_blocks were 1 (the target view)
+    #   rescale_kernel: false
+    #                      # true = shrink the per-block kernel as
+    #                      # n_blocks grows, so the stack keeps ONE
+    #                      # kernel_size-wide block's receptive field
+    #                      # (n*(k-1)+1 >= kernel_size) instead of
+    #                      # over-growing it; head params stay nearly
+    #                      # flat in depth. E.g. kernel_size 27 ->
+    #                      # per-block k = 27 / 15 / 11 / 9 at
+    #                      # n_blocks = 1 / 2 / 3 / 4.
+    #   groups:      1     # channel-mixing cuts (consecutive blocks
+    #                      # that never mix; conv params drop by the
+    #                      # same factor). Physical values only:
+    #                      #   plain rescnn (channels = bins):
+    #                      #     1 = dense; 2 = xi+ never mixes xi-
+    #                      #   rescnn + ia nla (channels = 3 x bins,
+    #                      #   template-major):
+    #                      #     1 = dense; 3 = GG/GI/II never mix;
+    #                      #     6 = templates isolated AND xi+
+    #                      #         isolated from xi-
+    #                      # anything else errors; the xi cut is
+    #                      # validated against the mask at build.
+    #   separable:   false # true = factor each block into a
+    #                      # depthwise theta filter + pointwise
+    #                      # channel mix (a low-rank factorization of
+    #                      # the same conv, ~k/2 times fewer weights;
+    #                      # composes with groups + rescale_kernel).
+    #   film:        false # true = re-inject the (non-amplitude)
+    #                      # parameters into every block as a
+    #                      # per-channel affine gamma(z)*c + beta(z)
+    #                      # (identity-initialized; the head becomes
+    #                      # cosmology-aware instead of one fixed
+    #                      # map; ~2*channels*n_param params/block;
+    #                      # amplitude exactness untouched).
+    #   n_blocks:    1     # stacked conv+activation blocks
+    #   gate_init:   0.1   # initial correction scale (small, not 0)
+    #
+    # Transformer head (name: restrf only): each bin is one token AT
+    # ITS NATURAL WIDTH (the padded bin length -- no embedding layer
+    # in, no projection out, so no width knob and no adapter
+    # parameters; with ia: nla the tokens are the (template, bin)
+    # pairs). Attention shares information across the tokens; each
+    # token gets its own private MLP stack.
+    # trf:
+    #   n_heads:      2    # parallel attention patterns; same params
+    #                      # and FLOPs at any value, but must divide
+    #                      # the bin length (26 -> 1 | 2 | 13)
+    #   n_blocks:     1    # stacked transformer blocks
+    #   n_mlp_blocks: 2    # each token's private MLP depth per block
+    #   shared_mlp: false  # true = one MLP for every token (the
+    #                      # textbook block; ablation of the unique-MLP
+    #                      # deviation -- then nothing structural tells
+    #                      # tokens apart, no positional encoding)
+    #   film:       false  # true = after every TRF block, modulate
+    #                      # the token stream with a cosmology-
+    #                      # dependent per-token affine (identity-
+    #                      # initialized; same design as cnn.film)
+    #   gate_init:    0.1  # initial correction scale (small, not 0)
+    #
+    # compile_mode: default  # conv/TRF models default to this because
+    #                        # CUDA-graph capture (reduce-overhead)
+    #                        # crashed on the gated skip-add (torch <=
+    #                        # 2.x, 2026-06); reduce-overhead is worth
+    #                        # ONE retry on a newer torch (it either
+    #                        # works or crashes in epoch 1).
+    #
+    # The ia designs need no other kwargs: n_amps and the template
+    # count plus the amplitude column names come from the design
+    # (IA_DESIGNS in experiment.py).
+
+  optimizer:             # cls is fixed to AdamW in the script
+    weight_decay: 0.0
+
+  lr:                    # learning rate = lr_base * sqrt(bs / bs_base)
+    lr_base:       0.0025
+    bs_base:       64.0
+    warmup_epochs: 10
+    # Two-phase runs: each phase RESTARTS at its base lr with a fresh
+    # warmup + scheduler (never phase 1's decayed lr); a head-specific
+    # base goes in the head: block above, not here.
+
+  scheduler:             # cls is fixed to ReduceLROnPlateau
+    mode:     min
+    patience: 25
+    factor:   0.8
+
+  trim:                  # hold `start`, then ease to `end`
+    start:         0.1
+    end:           0.025
+    hold_epochs:   50
+    anneal_epochs: 300
+    shape:         cosine
+
+  focus:                 # focal hardness weighting (gamma schedule)
+    start:         0.0
+    end:           2.0
+    hold_epochs:   50
+    anneal_epochs: 300
+    shape:         linear
+    kappa:         0.15

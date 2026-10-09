@@ -36,7 +36,7 @@ from cobaya.likelihood import Likelihood
 #         --boundary 1.0 \
 #         --zhd 3.0 \
 #         --nzhd 600 \
-#         --zhd 1200.0 \
+#         --zmax 1200.0 \
 #         --nzmax 200
 #
 #- The requested number of data vectors is given by the `--nparams` flag.
@@ -272,7 +272,7 @@ class dataset:
     self.covmat = None 
     self.dtype = np.float32
     self.dvsf = None 
-    self.derived = None
+    self.derived = True
     self.dvs_is_memmap = False
     self.freqchk = 5000 if args.freqchk is None else args.freqchk
     if self.freqchk < 1000:
@@ -352,7 +352,7 @@ class dataset:
 
     self.sampled_params = train_args['ord']  # preferred ordering of params
 
-    self.derived = train_args['derived'] if 'derived' in train_args else []
+    #self.derived = train_args['derived'] if 'derived' in train_args else []
 
     if not self.unif == 1:
       fid = train_args["fiducial"] # load fiducial data vector
@@ -382,6 +382,9 @@ class dataset:
       
     # Reorder bounds -----------------------------------------------------------
     self.names = list(self.model.parameterization.sampled_params().keys())
+    if set(self.sampled_params) != set(self.names):
+      raise ValueError(f"train_args.ord {set(self.sampled_params)}"
+                       f" != model sampled params {set(self.names)}")
     idx = self.reorder_idx_from_yaml_to_ord()
     
     # Here T (temp) stretch the hard bounds on parameters with Gaussian prior --
@@ -452,7 +455,23 @@ class dataset:
       self.dvsf = f"{root}/chains/{datavsfile}_{self.probe}_unifs"
       self.paramsf = f"{root}/chains/{paramfile}_{self.probe}_unifs"
       self.failf = f"{root}/chains/{failfile}_{self.probe}_unifs"
-    
+
+    #---------------------------------------------------------------------------
+    # Validate fiducial is inside the sampling bounds (Gaussian sampling only)
+    #---------------------------------------------------------------------------
+    if not self.unif == 1:
+      lp = self.__param_logpost(self.fiducial)
+      if not math.isfinite(lp):
+        oob = {p: (float(v), float(lo), float(hi))
+               for p, v, lo, hi in zip(self.sampled_params, self.fiducial,
+                                       self.bounds[:, 0], self.bounds[:, 1])
+               if not (lo <= v <= hi)}
+        raise ValueError(
+          f"train_args.fiducial has a non-finite log-posterior ({lp}): it lies "
+          f"outside the (temperature-stretched) sampling bounds. Fix the fiducial "
+          f"or widen the corresponding prior.\n"
+          f"Offending params [name: (value, low, high)]: {oob}")
+
     #---------------------------------------------------------------------------
     # Setup Done
     #---------------------------------------------------------------------------
@@ -485,7 +504,7 @@ class dataset:
                                                  f"{self.paramsf}.ranges",
                                                  f"{self.paramsf}.1.txt"]])
       if loadchk:
-        # load sample file begins ----------------------------------------------       
+        # load sample file begins ----------------------------------------------  
         # row 0/1 rows are weights, lnp. Last row is chi2
         self.samples = np.atleast_2d(np.loadtxt(f"{self.paramsf}.1.txt", 
                                                 dtype=self.dtype))[:,2:-1]
@@ -529,7 +548,7 @@ class dataset:
         if self.datavectors.ndim != 3:
           raise ValueError(f"datavectors must be 3D, got {self.datavectors.shape}") 
         if self.datavectors.shape[0] != self.samples.shape[0]:
-          raise ValueError(f"Incompatible samples/datavector chk files")  
+          raise ValueError(f"Incompatible samples/datavector chk files")
         print("Loaded models from chk")
         if self.append == 0:
           self.loadedsamples = True
@@ -616,7 +635,14 @@ class dataset:
           indices = np.random.choice(np.arange(len(xf)), size=self.nparams, replace=False)
           xf  = xf[indices,:]
           lnp = lnp[indices,:]
-        nparams = len(xf)        
+        nparams = len(xf)
+        # Double check that prior is not -infty --------------------------------
+        idx = self.reorder_idx_from_ord_to_yaml()
+        for i, x in enumerate(xf):
+          logprior = self.model.prior.logp(x[idx])
+          if math.isinf(logprior):
+              raise ValueError(f"Sample {i} has -inf prior. (this should not happen)"
+                               f"Values: {dict(zip(self.sampled_params, x))}")       
       else:
         nparams  = self.nparams
         bds = self.bounds.copy()
@@ -628,15 +654,14 @@ class dataset:
                                 size = (nparams,ndim))
         lnp = np.ones((nparams,1), dtype=self.dtype)
         # Double check that prior is not -infty --------------------------------
+        idx = self.reorder_idx_from_ord_to_yaml()
         for i, x in enumerate(xf):
-          idx = self.reorder_idx_from_ord_to_yaml()
           logprior = self.model.prior.logp(x[idx])
           if math.isinf(logprior):
-              raise ValueError(f"Sample {i} has -inf prior. (should not happen)"
+              raise ValueError(f"Sample {i} has -inf prior. (this should not happen)"
                                f"Values: {dict(zip(self.sampled_params, x))}")
       w = np.ones((nparams,1), dtype=self.dtype)
       chi2 = -2*lnp
-
       if not loadedfromchk:
         # Output some debug messaging ------------------------------------------
         if not self.unif == 1:
@@ -791,7 +816,7 @@ class dataset:
                                      mmap_mode = "r+", 
                                      allow_pickle = False)
           self.dvs_is_memmap = True
-        # append dvs ends ------------------------------------------------------
+        # Expand dvs ends ------------------------------------------------------
         
         # check final dimensions -----------------------------------------------
         if self.datavectors.shape[0] != self.samples.shape[0]:
@@ -968,6 +993,7 @@ class dataset:
         completed = np.zeros(nparams, dtype=bool)
 
         if not self.loadedfromchk:
+          # Allocate failed array begins ---------------------------------------
           self.failed = np.ones(nparams, dtype=np.uint8) # start w/ all failed
           self.failed = np.asarray(self.failed).astype(bool)
           
@@ -1055,7 +1081,7 @@ class dataset:
                 completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1) 
-            time.sleep(.1) # avoid 100% CPU usage
+            time.sleep(.005) # avoid 100% CPU usage
         # end of while loop  
 
         # drain last tasks from active MPI workers -----------------------------
@@ -1094,7 +1120,7 @@ class dataset:
                 completed[idx] = True
               self.__save_chk() # save before crashing
               comm.Abort(1)
-            time.sleep(.1) # avoid 100% CPU usage    
+            time.sleep(.005) # avoid 100% CPU usage    
         # end active workers
         
         # stop workers ---------------------------------------------------------
@@ -1118,13 +1144,17 @@ class dataset:
                 sys.stderr.write(f"[Rank 0] Worker {w} timed out (MPI DTAG)")
                 sys.stderr.flush()
                 comm.Abort(1)
-            time.sleep(.1) # avoid 100% CPU usage
+            time.sleep(.005) # avoid 100% CPU usage
         # end stop workers
       
       else:
-      
         status = MPI.Status()
         while (True):
+          # poll politely instead of busy-waiting in a blocking recv
+          while not comm.Iprobe(source=0, 
+                                tag=MPI.ANY_TAG, 
+                                status=status):
+            time.sleep(.005) # ~0% CPU while rank 0 runs the MCMC
           idx, sample = comm.recv(source = 0, 
                                   tag = MPI.ANY_TAG, 
                                   status = status) # try block on main b/c if
