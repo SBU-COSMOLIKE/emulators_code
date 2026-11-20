@@ -143,7 +143,15 @@ class PkEmulator:
         np.linspace(10, 50, 12)
     ))
     N_ZS = len(Z_MODES)
- 
+
+    # Values used for optional trailing inputs when the caller omits them
+    # (e.g. a mead2020 model that has no T_AGN and was trained at fixed mnu).
+    DEFAULT_W0   = -1.0
+    DEFAULT_WA   = 0.0
+    DEFAULT_TAGN = 7.8
+    DEFAULT_MNU  = 0.06
+    N_FULL_PARAMS = 9
+
     def __init__(self,
                  model_file: str = None,
                  metadata_file: str = None,
@@ -393,6 +401,38 @@ class PkEmulator:
     # Shared helpers
     # -------------------------------------------------------------------------
  
+    def _fill_params(self, params) -> np.ndarray:
+        """
+        Pad a parameter vector to the full 9-column layout
+        [As, ns, H0, Ob, Om, w0, wa, T_AGN, mnu].
+
+        Accepts 5 (LCDM) to 9 entries; missing trailing entries take the class
+        defaults (w0=-1, wa=0, T_AGN=DEFAULT_TAGN, mnu=DEFAULT_MNU).  Each
+        network only reads its first n_features_in_ columns, so the padded
+        T_AGN / mnu never reach a model that was not trained on them; mnu
+        does always enter the syren baseline.
+        """
+        p = np.asarray(params, dtype=np.float64).ravel()
+        if not 5 <= p.size <= self.N_FULL_PARAMS:
+            raise ValueError(
+                f"[emulmps] expected 5-{self.N_FULL_PARAMS} parameters "
+                f"[As, ns, H0, Ob, Om, (w0, wa, T_AGN, mnu)], got {p.size}."
+            )
+        defaults = [self.DEFAULT_W0, self.DEFAULT_WA, self.DEFAULT_TAGN, self.DEFAULT_MNU]
+        return np.concatenate([p, defaults[p.size - 5:]])
+
+    @property
+    def n_lin_inputs(self) -> int:
+        """Number of leading parameter columns the linear network reads."""
+        return int(self.param_scaler.n_features_in_)
+
+    @property
+    def n_nl_inputs(self) -> int:
+        """Number of leading parameter columns the boost network reads (0 if none)."""
+        if self._nl_param_scaler is None:
+            return 0
+        return int(self._nl_param_scaler.n_features_in_)
+
     def _set_k_grid(self, ks) -> None:
         """k grid from the linear bundle (instance attribute; the class default
         is the original 500-point grid)."""
@@ -501,7 +541,7 @@ class PkEmulator:
         p = np.asarray(params, dtype=np.float64)
         As, ns, H0_in, Ob, Om, w0, wa = p[:7]
         h   = H0_in / 100.0
-        mnu = p[8] if len(p) > 8 else 0.06
+        mnu = p[8] if len(p) > 8 else self.DEFAULT_MNU
         k_h = self.K_MODES / h
         a   = self._a_array64
  
@@ -546,12 +586,13 @@ class PkEmulator:
         Return linear P(k, z) for a single cosmology on the full grid.
  
         params    : [10^9 A_s, ns, H0, Ob, Om, w0, wa, T_AGN, mnu] — wa in col 6.
+                    Trailing entries may be omitted (see _fill_params).
         use_syren : if True, skip the NN and return the syren approximation only.
  
         Returns (K_MODES, Z_MODES, P_lin) with P_lin in Mpc^3, shape (N_ZS, N_K_MODES).
         """
         buf = self._params_buf
-        buf[0, :] = params   # wa stays in col 6 for the approximation
+        buf[0, :] = self._fill_params(params)   # wa stays in col 6 for the approximation
  
         if self._baseline is not None:
             _, _, pk_mps = self._baseline.get_pks(buf[0, :7])
@@ -582,7 +623,7 @@ class PkEmulator:
         p = np.asarray(params, dtype=np.float64)
         As, ns, H0_in, Ob, Om, w0, wa = p[:7]
         h   = H0_in / 100.0
-        mnu = p[8] if len(p) > 8 else 0.06
+        mnu = p[8] if len(p) > 8 else self.DEFAULT_MNU
         k_h = self.K_MODES / h
         a   = self._a_array64
  
@@ -625,6 +666,7 @@ class PkEmulator:
         full grid.  Multiply by the LINEAR EMULATOR output (get_pks) to get P_nl.
  
         params    : [10^9 A_s, ns, H0, Ob, Om, w0, wa, T_AGN, mnu] — wa in col 6.
+                    Trailing entries may be omitted (see _fill_params).
         pk_lin    : unused (kept for API compatibility); the boost is
                     dimensionless and independent of the P_lin it is applied to.
         use_syren : if True, return the syren-halofit boost only (no network).
@@ -633,7 +675,7 @@ class PkEmulator:
             raise RuntimeError("No nonlinear boost model loaded.")
  
         buf = self._params_buf
-        buf[0, :] = params
+        buf[0, :] = self._fill_params(params)
  
         b_syren = self._compute_syren_boost_nl(buf[0])
         log_b   = np.log(b_syren)

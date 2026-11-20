@@ -72,7 +72,7 @@ def _get_nl_pcs(emu, params_9):
     Shape (emu.N_ZS, emu._nl_n_pcs).
     """
     buf = emu._params_buf
-    buf[0, :] = params_9
+    buf[0, :] = emu._fill_params(params_9)
 
     x_norm    = emu._norm_params_for_scaler(buf, emu._nl_param_scaler)
     net_input = emu._make_nl_network_input(x_norm)
@@ -306,7 +306,22 @@ class emulmps(Theory):
         approximations (syren P_lin and syren-halofit boost).  Must be False
         (the default) to use the emulators.
     param_order : list of str
-        Order of cosmological parameters (default: w0waCDM ordering).
+        Cosmological parameters the emulator reads from Cobaya (default: the
+        full w0waCDM + HMCode_logT_AGN + mnu list).  Optional entries:
+
+        * w / w0, wa       -> omitted: w0 = -1, wa = 0 (LCDM / wCDM)
+        * HMCode_logT_AGN  -> omitted: fixed at fixed_params['HMCode_logT_AGN']
+        * mnu              -> omitted: fixed at fixed_params['mnu']
+
+        At start-up param_order is checked against the number of inputs each
+        loaded network was trained on: listing HMCode_logT_AGN for a model
+        without it is an error; omitting a parameter a model does take gives
+        a warning and uses the fixed value.
+    fixed_params : dict, optional
+        Values used for HMCode_logT_AGN and mnu when they are not in
+        param_order (default {HMCode_logT_AGN: 7.8, mnu: 0.06}).  For a model
+        trained at fixed mnu this must be the training value, since mnu
+        always enters the syren baseline.
     kmax_cut : float or None
         Drop emulator k modes above this value, in 1/Mpc (default 50; the same
         units as CAMB's kmax in a Cobaya yaml).  Applied to the k grid, the
@@ -404,6 +419,23 @@ class emulmps(Theory):
                 "Cannot specify both 'w' and 'w0' in param_order."
             )
 
+        # Values for the optional inputs when they are not sampled/passed.
+        self.fixed_params = {'HMCode_logT_AGN': 7.8, 'mnu': 0.06}
+        user_fixed = dict(self.extra_args.get('fixed_params', None) or {})
+        bad = set(user_fixed) - set(self.fixed_params)
+        if bad:
+            raise LoggedError(
+                self.log,
+                f"fixed_params only accepts {sorted(self.fixed_params)}, got {sorted(bad)}."
+            )
+        self.fixed_params.update({k: float(v) for k, v in user_fixed.items()})
+        clash = set(user_fixed) & set(self.param_order)
+        if clash:
+            self.log.warning(
+                f"fixed_params {sorted(clash)} are also in param_order; the value "
+                "from Cobaya is used and fixed_params is ignored for them."
+            )
+
         self.req = {param: None for param in self.param_order}
 
         # --- Hybrid CAMB / emulator test mode ---------------------------------
@@ -470,6 +502,9 @@ class emulmps(Theory):
             nl_metadata_file=nl_metadata_file,
             nl_model_type=nl_model_type,
         )
+        self._emulator.DEFAULT_TAGN = self.fixed_params['HMCode_logT_AGN']
+        self._emulator.DEFAULT_MNU  = self.fixed_params['mnu']
+        self._check_param_coverage()
 
         ##### vic add
         # --- PC diagnostics (off by default; only for single-eval T_AGN sweeps) ---
@@ -563,25 +598,7 @@ class emulmps(Theory):
         otherwise only the linear grid is stored.
         """
         try:
-            emul_params = []
-            for p in self.param_order:
-                emul_params.append(params[p])
-
-            has_w0 = "w0" in self.param_order
-            has_wa = "wa" in self.param_order
-            has_w  = "w"  in self.param_order
-            has_Tagn = "HMCode_logT_AGN" in self.param_order
-            has_mnu = "mnu" in self.param_order
-
-            if has_w:
-                if not has_wa:
-                    emul_params.append(0.0)
-            elif has_w0 and not has_wa:
-                emul_params.append(0.0)
-            elif not has_w0 and not has_w:
-                emul_params.extend([-1.0, 0.0])
-
-            h = params['H0'] / 100.0
+            emul_params = self._emul_param_vector(params)
 
             # ------------------------------------------------------------------
             # Linear P(k)
@@ -622,7 +639,7 @@ class emulmps(Theory):
                 # --- PC diagnostics: capture the NL PCA coefficients for this sample ---
                 if self.save_pc_diagnostics:
                     pcs_z = _get_nl_pcs(self._emulator, emul_params)   # (N_ZS, n_pcs)
-                    tagn_val = params.get("HMCode_logT_AGN", np.nan)
+                    tagn_val = emul_params[7]
                     rows = [
                         (tagn_val, iz, z_val, p, pcs_z[iz, p])
                         for iz, z_val in enumerate(self._emulator.Z_MODES)
@@ -720,6 +737,74 @@ class emulmps(Theory):
                 return False
 
     # ----------------------------------------------------------------------
+    # Parameter handling
+    # ----------------------------------------------------------------------
+    def _emul_param_vector(self, params):
+        """
+        Build the emulator's full input [As_1e9, ns, H0, Ob, Om, w0, wa,
+        T_AGN, mnu] by NAME, so param_order may omit (or reorder) the
+        optional entries.  Omitted: w0 = -1, wa = 0, T_AGN and mnu from
+        fixed_params.
+        """
+        po = self.param_order
+        if 'w' in po:
+            w0 = params['w']
+        elif 'w0' in po:
+            w0 = params['w0']
+        else:
+            w0 = -1.0
+        return [
+            params['As_1e9'], params['ns'], params['H0'],
+            params['omegab'], params['omegam'],
+            w0,
+            params['wa'] if 'wa' in po else 0.0,
+            params['HMCode_logT_AGN'] if 'HMCode_logT_AGN' in po
+            else self.fixed_params['HMCode_logT_AGN'],
+            params['mnu'] if 'mnu' in po else self.fixed_params['mnu'],
+        ]
+
+    def _check_param_coverage(self):
+        """
+        Compare param_order with the inputs the loaded networks actually read
+        (each reads the first n_features_in_ columns of
+        [As, ns, H0, Ob, Om, w0+wa, ..., T_AGN, mnu]).
+        """
+        if self.use_syren:
+            return
+        emu = self._emulator
+        n_in = {'linear': emu.n_lin_inputs}
+        if emu.has_nl_model():
+            n_in['boost'] = emu.n_nl_inputs
+        self.log.info(
+            "Network inputs: " + ", ".join(f"{m} = {n}" for m, n in n_in.items())
+        )
+        for col, name in ((7, 'HMCode_logT_AGN'), (8, 'mnu')):
+            readers = [m for m, n in n_in.items() if n > col]
+            listed = name in self.param_order
+            if readers and not listed:
+                self.log.warning(
+                    f"The {' and '.join(readers)} model(s) take {name} as an input but "
+                    f"it is not in param_order: fixed at {self.fixed_params[name]} "
+                    "(set fixed_params, or add it to param_order to vary it)."
+                )
+            elif listed and not readers:
+                if name == 'HMCode_logT_AGN':
+                    raise LoggedError(
+                        self.log,
+                        "HMCode_logT_AGN is in param_order but none of the loaded "
+                        f"models use it (inputs: {n_in}).  Remove it from param_order "
+                        "and from the yaml params block."
+                    )
+                self.log.warning(
+                    "mnu is in param_order but none of the loaded networks take it "
+                    f"as an input (inputs: {n_in}).  It only changes the syren "
+                    "baseline; keep it fixed at the models' training value."
+                )
+        if 'HMCode_logT_AGN' not in self.param_order and not any(
+                n > 7 for n in n_in.values()):
+            self.log.info("No T_AGN input (e.g. mead2020 without feedback).")
+
+    # ----------------------------------------------------------------------
     # Hybrid CAMB / emulator test mode
     # ----------------------------------------------------------------------
     def _k_keep(self, k_mpc):
@@ -771,6 +856,10 @@ class emulmps(Theory):
         for p in ('wa', 'mnu', 'HMCode_logT_AGN'):
             if p in self.param_order:
                 point[p] = params[p]
+        # Same fixed mnu as the emulator (T_AGN is not passed: plain mead2020
+        # in CAMB does not accept it).
+        if 'mnu' not in point and 'mnu' not in self.camb_params:
+            point['mnu'] = self.fixed_params['mnu']
         return {k: float(v) for k, v in point.items()}
 
     def _init_camb_model(self, point, k_mpc, z_array):
