@@ -1,3 +1,93 @@
+# # Essential components required for fastMPS emulator — MLP + NPCE
+
+
+# import numpy as np
+# import tensorflow as tf
+# from keras import layers
+
+
+# ks = np.logspace(-5.1, 2, 500)
+# z_mps = np.concatenate((
+#     np.linspace(0, 3, 33, endpoint=False),
+#     np.linspace(3, 10, 7, endpoint=False),
+#     np.linspace(10, 50, 12)
+# ))
+
+        
+
+# # Bernardo's code for KAN model in PyTorch
+# class Scaler:
+#     def __init__(self):
+#         self.mean = None
+#         self.std = None
+
+#     def fit(self, X):
+#         self.mean = np.mean(X, axis=0)
+#         self.std = np.std(X, axis=0)
+
+#     def transform(self, X):
+#         return (X - self.mean) / self.std
+
+#     def inverse_transform(self, X):
+#         return (X* self.std) + self.mean
+    
+
+# class CustomActivationLayer(layers.Layer):
+#     def __init__(self, units, **kwargs):
+#         # IMPORTANT: Always call the super constructor first
+#         super(CustomActivationLayer, self).__init__(**kwargs)
+#         self.units = units
+#         # Set a dictionary property for compatibility with get_config
+#         self.input_spec = layers.InputSpec(min_ndim=2)
+
+#     def build(self, input_shape):
+#         # Create trainable weights
+#         self.beta = self.add_weight(shape=(self.units,), initializer='random_normal', trainable=True, name="beta")
+#         self.gamma = self.add_weight(shape=(self.units,), initializer='random_normal', trainable=True, name="gamma")
+#         super(CustomActivationLayer, self).build(input_shape)
+
+#     def call(self, x):
+#         # Activation function logic
+#         func = tf.add(self.gamma, tf.multiply(tf.sigmoid(tf.multiply(self.beta, x)), tf.subtract(1.0, self.gamma)))
+#         return tf.multiply(func, x)
+    
+#     def get_config(self):
+#         # Get the base config from the Layer class (includes name, dtype, etc.)
+#         config = super(CustomActivationLayer, self).get_config()
+#         # Add the required constructor arguments
+#         config.update({'units': self.units})
+#         return config
+
+#     @classmethod
+#     def from_config(cls, config):
+#         # Use the saved config to reconstruct the class instance
+#         return cls(**config)
+#     def compute_output_shape(self, input_shape):
+#         return (input_shape[0], self.units)
+    
+
+# class TComponentScaler:
+#     """
+#     Per-column standardisation for t-components.
+#     Stores mean and std computed on the training set so that inference can
+#     invert the transform consistently.
+#     """
+#     def __init__(self):
+#         self.mean_ = None
+#         self.std_  = None
+
+#     def fit(self, T: np.ndarray) -> "TComponentScaler":
+#         self.mean_ = T.mean(axis=0)
+#         self.std_  = T.std(axis=0)
+#         self.std_  = np.where(self.std_ == 0, 1.0, self.std_)
+#         return self
+
+#     def transform(self, T: np.ndarray) -> np.ndarray:
+#         return (T - self.mean_) / self.std_
+
+#     def inverse_transform(self, T_norm: np.ndarray) -> np.ndarray:
+#         return T_norm * self.std_ + self.mean_
+
 # Essential components required for fastMPS emulator — MLP + NPCE
 
 
@@ -46,9 +136,18 @@ class CustomActivationLayer(layers.Layer):
         self.gamma = self.add_weight(shape=(self.units,), initializer='random_normal', trainable=True, name="gamma")
         super(CustomActivationLayer, self).build(input_shape)
 
+    # def call(self, x):
+    #     # Activation function logic
+    #     func = tf.add(self.gamma, tf.multiply(tf.sigmoid(tf.multiply(self.beta, x)), tf.subtract(1.0, self.gamma)))
+    #     return tf.multiply(func, x)
+
     def call(self, x):
-        # Activation function logic
-        func = tf.add(self.gamma, tf.multiply(tf.sigmoid(tf.multiply(self.beta, x)), tf.subtract(1.0, self.gamma)))
+        beta  = tf.cast(self.beta, x.dtype)
+        gamma = tf.cast(self.gamma, x.dtype)
+        func = tf.add(
+            gamma,
+            tf.multiply(tf.sigmoid(tf.multiply(beta, x)), tf.subtract(tf.cast(1.0, x.dtype), gamma))
+        )
         return tf.multiply(func, x)
     
     def get_config(self):
