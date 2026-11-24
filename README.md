@@ -75,6 +75,55 @@ Agreement near a fiducial point does not establish accuracy throughout a
 prior. The derived `sigma8` now uses a radius of 8/h Mpc for the physical-Mpc
 spectrum, correcting the earlier 8 Mpc radius without changing the spectra.
 
+### Linear cold-matter power
+
+To request `delta_nonu` (cold dark matter plus baryons), add these entries
+inside `emulmps.extra_args`:
+
+```yaml
+cold_power: eisenstein_hu
+cold_neutrino_species: 3
+```
+
+Choose the number of equal-mass neutrino species to match the physical
+calculation. DES Cluster's current CAMB example uses one, while the DES
+3PCF example uses three. Keep the mass at the trained value, 0.06 eV for the
+current seven-input bundle. This option supplies **linear** cold power for
+flat LCDM with standard thermal neutrinos, N_eff=3.046 and T_CMB=2.7255 K.
+It refuses dynamical-dark-energy cold requests; total-matter calculations
+retain their existing model support. It does not supply nonlinear cold
+power or a cold--total cross spectrum.
+
+The approximation is
+
+$$P_{cb}(k,z) = P_{mm}(k,z)
+  [T_{cb}^{\rm EH}(k,z)/T_{cb\nu}^{\rm EH}(k,z)]^2.$$
+
+Both transfer functions use the same massive-neutrino cosmology. The common
+master transfer function and common growth factor cancel, leaving the
+relative growth terms of [Eisenstein and Hu's implementation](https://background.uchicago.edu/~whu/transfer/power.c)
+and equations 12--14 of [their paper](https://arxiv.org/abs/astro-ph/9710252).
+A massless transfer function in the numerator would target a different
+physical spectrum. The finite-time fit also has a small residual from
+unity at very small k; no extra normalization is imposed here.
+
+In the DES Cluster 4x2pt+counts test at fixed mass, H0=69 and Omega_m of
+0.30, 0.25 and 0.40, replacing cold power by total power gave direct-vector
+covariance distances 3.17, 1.73 and 8.37. A constant `(1-f_nu)^-2` correction
+gave 0.00770, 0.00418 and 0.0276. This scale-dependent ratio gave 0.0000216,
+0.00000497 and 0.000156. The spectrum residual was below 0.034% over the
+sampled k=0.0001--10 1/Mpc and z=0--2 grid. These tests isolate the field
+conversion using CAMB total power; the neural-network error is additional.
+They establish neither a whole-prior bound nor validity for varying mass.
+
+The cold grid is stored in the current Cobaya state. Requesting it clears
+older states; total and cold interpolation caches have distinct field keys.
+Run the tests from this repository with Cocoa active:
+
+```bash
+python -m pytest emulmps/tests/test_sigma8.py emulmps/tests/test_cold_power.py
+```
+
 # Credits <a name="appendix_proper_credits"></a>
 
 <p align="center">

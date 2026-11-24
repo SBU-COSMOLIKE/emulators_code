@@ -46,6 +46,7 @@ def test_calculate_passes_current_hubble_parameter():
     theory._nl_available = lambda: False
     theory.use_syren = False
     theory._use_camb = False
+    theory._need_cold_power = False
     theory.output_params = ["sigma8"]
     theory.stop_at_error = True
     values = []

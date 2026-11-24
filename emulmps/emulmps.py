@@ -328,6 +328,15 @@ class emulmps(Theory):
         linear spectrum and the boost before anything else uses them.  Set to
         null to keep the full emulator grid.
 
+    cold_power : null or 'eisenstein_hu'
+        Opt in to approximate linear delta_nonu power, using the squared
+        cold/total transfer ratio at the same neutrino mass. Supported here
+        for flat LCDM, standard thermal neutrinos and T_CMB=2.7255 K.
+        Nonlinear cold power and mixed-field cross power are not supplied.
+    cold_neutrino_species : int, default 3
+        Number (1, 2 or 3) of equal-mass species in that ratio. Match the
+        physical convention of the requested calculation and training data.
+
     Hybrid CAMB / emulator test mode
     --------------------------------
     lin_source : 'emul' (default) or 'camb'
@@ -376,6 +385,15 @@ class emulmps(Theory):
         self.renames    = empty_dict
         self.extra_args = getattr(self, 'extra_args', {})
 
+        # The cold field is an explicit approximation, computed only if
+        # requested. Existing total-matter users retain their original path.
+        self.cold_power = self.extra_args.get('cold_power', None)
+        if self.cold_power not in (None, 'eisenstein_hu'):
+            raise LoggedError(self.log, "cold_power must be null or eisenstein_hu.")
+        self.cold_neutrino_species = self.extra_args.get('cold_neutrino_species', 3)
+        if self.cold_neutrino_species not in (1, 2, 3):
+            raise LoggedError(self.log, "cold_neutrino_species must be 1, 2 or 3.")
+        self._need_cold_power = False
         # False = use the emulators.  True bypasses both networks (debug only).
         self.use_syren         = bool(self.extra_args.get('use_syren', False))
         self.nonlinear_method  = self.extra_args.get('nonlinear_method', 'halofit+')
@@ -588,6 +606,69 @@ class emulmps(Theory):
     def get_requirements(self):
         return self.req
 
+    def must_provide(self, **requirements):
+        # Cobaya clears cached states when a new product is requested.
+        # Otherwise adding the cold field after a total-only evaluation
+        # could reuse a state that contains no cold spectrum.
+        super().must_provide(**requirements)
+        for product in ('Pk_grid', 'Pk_interpolator'):
+            options = requirements.get(product) or {}
+            pairs = options.get('vars_pairs', [('delta_tot', 'delta_tot')])
+            if any(tuple(pair) == ('delta_nonu', 'delta_nonu') for pair in pairs):
+                if self.cold_power != 'eisenstein_hu':
+                    raise LoggedError(self.log,
+                        "delta_nonu requires extra_args cold_power: eisenstein_hu.")
+                if not self._need_cold_power:
+                    self.log.info("Linear delta_nonu uses the Eisenstein-Hu cold/total ratio.")
+                self._need_cold_power = True
+
+    def _cold_power_ratio(self, k, z, parameters):
+        """Return the linear cold/total power ratio at the SAME neutrino mass.
+
+        Eisenstein & Hu, astro-ph/9710252, equations 12--14 and power.c:
+        https://background.uchicago.edu/~whu/transfer/power.c
+        Both transfer functions share their master shape. It cancels in
+        T_cb/T_cbnu, as does the common growth^(1-p_cb) factor. Squaring
+        the remaining ratio converts transfer amplitudes to power.
+
+        k is physical 1/Mpc, z is redshift, and parameters is the ordinary
+        nine-entry emulator input. The original growth fit assumes flat
+        LCDM here; applying it to dynamical dark energy would need a
+        separate validation. This is a linear-field approximation, not a
+        prescription for nonlinear cold power or cold--neutrino cross power.
+        """
+        h = parameters[2] / 100.0
+        omega_m = parameters[4]
+        if parameters[5] != -1.0 or parameters[6] != 0.0:
+            raise LoggedError(self.log,
+                "Eisenstein-Hu cold power is validated here for flat LCDM only.")
+        # Same standard thermal-neutrino density convention as Cocoa's
+        # CAMB parameter blocks: T_CMB=2.7255 K and N_eff=3.046.
+        omega_nu_h2 = parameters[8] * (3.046 / 3.0)**0.75 / 94.0708
+        fraction = omega_nu_h2 / (omega_m * h**2)
+        if not 0 <= fraction < 0.3:
+            raise LoggedError(self.log, "Eisenstein-Hu requires 0 <= f_nu < 0.3.")
+        if fraction == 0:
+            return np.ones((len(z), len(k)))
+        theta = 2.7255 / 2.7
+        equality = 25000 * omega_m * h**2 / theta**4
+        denominator = omega_m * (1 + z)**3 + (1 - omega_m)
+        matter_z = omega_m * (1 + z)**3 / denominator
+        lambda_z = (1 - omega_m) / denominator
+        growth = equality / (1 + z) * 2.5 * matter_z / (
+            matter_z**(4 / 7) - lambda_z
+            + (1 + matter_z / 2) * (1 + lambda_z / 70)
+        )
+        exponent = (5 - np.sqrt(1 + 24 * (1 - fraction))) / 4
+        q = k * theta**2 / (omega_m * h**2)
+        free_streaming = (
+            17.2 * fraction * (1 + 0.488 * fraction**(-7 / 6))
+            * (self.cold_neutrino_species * q / fraction)**2
+        )
+        transition = (growth[:, None] / (1 + free_streaming[None, :]))**0.7
+        return ((1 + transition) /
+                ((1 - fraction)**(0.7 / exponent) + transition))**(2 * exponent / 0.7)
+
     def calculate(self, state, want_derived=True, **params):
         """
         Calculate P(k,z) and store linear (and optionally nonlinear) grids in
@@ -711,6 +792,12 @@ class emulmps(Theory):
                 'z': z_array,
                 'Pk': Pk_lin_mpc,
             }
+
+            if self._need_cold_power:
+                ratio = self._cold_power_ratio(k_mpc, z_array, emul_params)
+                state[("Pk_grid", False, "delta_nonu", "delta_nonu")] = (
+                    k_mpc, z_array, Pk_lin_mpc * ratio
+                )
 
             if want_derived:
                 derived = {}
@@ -1034,11 +1121,11 @@ class emulmps(Theory):
 
         Returns P(k,z) in standard Cobaya units: k in 1/Mpc, Pk in Mpc^3.
         """
-        if var_pair != ("delta_tot", "delta_tot"):
-            raise LoggedError(
-                self.log,
-                f"emulmps only supports delta_tot power spectra, not {var_pair}"
-            )
+        var_pair = tuple(var_pair)
+        if var_pair not in (("delta_tot", "delta_tot"), ("delta_nonu", "delta_nonu")):
+            raise LoggedError(self.log, f"Unsupported matter fields: {var_pair}")
+        if var_pair == ("delta_nonu", "delta_nonu") and nonlinear:
+            raise LoggedError(self.log, "Eisenstein-Hu supplies linear cold power only.")
 
         nl_available = self._nl_available()
         if nonlinear and not nl_available:
@@ -1052,7 +1139,8 @@ class emulmps(Theory):
         if key in self.current_state:
             return self.current_state[key]
 
-        if not nonlinear and "Pk_grid" in self.current_state:
+        if (var_pair == ("delta_tot", "delta_tot")
+                and not nonlinear and "Pk_grid" in self.current_state):
             pk_dict = self.current_state["Pk_grid"]
             return pk_dict['k'], pk_dict['z'], pk_dict['Pk']
 
@@ -1069,11 +1157,11 @@ class emulmps(Theory):
         extrap_kmax=None,
     ) -> PowerSpectrumInterpolator:
         r"""Get a P(z,k) bicubic interpolation object."""
-        if var_pair != ("delta_tot", "delta_tot"):
-            raise LoggedError(
-                self.log,
-                f"emulmps only supports delta_tot power spectra, not {var_pair}"
-            )
+        var_pair = tuple(var_pair)
+        if var_pair not in (("delta_tot", "delta_tot"), ("delta_nonu", "delta_nonu")):
+            raise LoggedError(self.log, f"Unsupported matter fields: {var_pair}")
+        if var_pair == ("delta_nonu", "delta_nonu") and nonlinear:
+            raise LoggedError(self.log, "Eisenstein-Hu supplies linear cold power only.")
 
         nl_available = self._nl_available()
         if nonlinear and not nl_available:
