@@ -45,6 +45,36 @@ For Supernovae luminosity distances and BAO observable emulators, we adopt ResML
 
 **Step :five:**: Similarly specify the 'filename' and 'extraname' for the GP for $r_{drag}$ for BAO likelihoods.
 
+## Matter power: Victoria Lloyd's hybrid emulator
+
+The `emulmps` Cobaya theory block supports Victoria Lloyd's nonlinear
+Mead2020 network. Select its files in the theory block's `extra_args`:
+
+```yaml
+nl_model_file: external_modules/data/emultrf/emulmps/w0wa_mead2020/emulator_mead2020.keras
+nl_metadata_file: external_modules/data/emultrf/emulmps/w0wa_mead2020/metadata.joblib
+param_order: [As_1e9, ns, H0, omegab, omegam, w, wa]
+fixed_params: {mnu: 0.06}
+```
+
+Keep the linear model and metadata settings from the Cocoa example. These
+nonlinear files are in the companion `emulators_data_lcdm` repository and
+require Git LFS. The seven-input bundle has no baryonic-feedback temperature
+or neutrino-mass input. Use fixed total neutrino mass 0.06 eV and plain
+Mead2020 for the comparisons made here. The developer reports an amplitude
+testing range of `1 <= As_1e9 <= 3.5`, plus padding; a wider project prior
+is a deliberate test outside that reported range. The neutrino species
+convention still needs confirmation against the training calculation.
+
+The old model files remain available, but loading them with the new reader
+does not guarantee identical predictions: the nonlinear analytic baseline
+changed. Rerun the project's official hybrid-emulator tests before using
+its outputs for inference. They compare the prediction difference directly
+with the project's covariance and produce the Fisher-overlay accuracy plot.
+Agreement near a fiducial point does not establish accuracy throughout a
+prior. The derived `sigma8` now uses a radius of 8/h Mpc for the physical-Mpc
+spectrum, correcting the earlier 8 Mpc radius without changing the spectra.
+
 # Credits <a name="appendix_proper_credits"></a>
 
 <p align="center">

@@ -716,7 +716,7 @@ class emulmps(Theory):
                 derived = {}
                 if 'sigma8' in self.output_params:
                     derived['sigma8'] = self._compute_sigma8(
-                        Pk_lin_mpc, k_mpc, z_array, z=0.0
+                        Pk_lin_mpc, k_mpc, z_array, h=emul_params[2] / 100.0, z=0.0
                     )
                 state["derived"] = derived
 
@@ -1131,8 +1131,10 @@ class emulmps(Theory):
         self.current_state[key] = result
         return result
 
-    def _compute_sigma8(self, Pk_2d, k_array, z_array, z=0.0):
-        """Compute sigma8 from linear P(k) at redshift z."""
+    def _compute_sigma8(self, Pk_2d, k_array, z_array, h, z=0.0):
+        """Compute sigma8 using k in 1/Mpc, P in Mpc^3, and h=H0/100."""
+        if not np.isfinite(h) or h <= 0:
+            raise ValueError("sigma8 requires a finite positive H0/100.")
         z_idx = np.argmin(np.abs(z_array - z))
         if np.abs(z_array[z_idx] - z) > 0.01:
             from scipy.interpolate import interp1d
@@ -1141,7 +1143,10 @@ class emulmps(Theory):
         else:
             Pk_z = Pk_2d[z_idx, :]
 
-        R  = 8.0
+        # Sigma8 smooths the density over 8 h^-1 Mpc. Our spectrum uses
+        # physical Mpc, so the radius in k*R must be 8/h, not 8. Changing
+        # this radius only changes the derived value, not either P(k) grid.
+        R  = 8.0 / h
         x  = k_array * R
         W  = np.zeros_like(x)
         mask = x > 1e-6
